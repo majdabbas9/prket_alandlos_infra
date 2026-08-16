@@ -1,0 +1,66 @@
+services:
+  # Backend Node.js Express API
+  backend:
+    image: ghcr.io/majdabbas9/prket_alandlos_backend:latest
+    container_name: prket_alandlos_backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - ADMIN_BACKEND_URL=http://admin-backend:5001
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - prket_network
+
+  frontend:
+    image: ghcr.io/majdabbas9/prket_alandlos_frontend:latest
+    container_name: prket_alandlos_frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - prket_network
+
+  admin-frontend:
+    image: ghcr.io/majdabbas9/prket_alandlos_admin_frontend:latest
+    container_name: prket_alandlos_admin_frontend
+    restart: always
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+    networks:
+      - prket_network
+
+  admin-backend:
+    image: ghcr.io/majdabbas9/prket_alandlos_admin_backend:latest
+    container_name: prket_alandlos_admin_backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "5001:5001"
+    environment:
+      - NODE_ENV=production
+      - PORT=5001
+    networks:
+      - prket_network
+  
+  redis:
+    image: redis:alpine
+    container_name: prket_alandlos_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - prket_network
+
+networks:
+  prket_network:
+    driver: bridge
