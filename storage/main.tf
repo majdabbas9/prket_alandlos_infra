@@ -20,7 +20,8 @@ terraform {
   }
 }
 
-# Authenticates via CLOUDFLARE_API_TOKEN (needs Workers R2 Storage: Edit and D1: Edit).
+# Authenticates via CLOUDFLARE_API_TOKEN (needs Workers R2 Storage: Edit).
+# The D1 database is NOT managed here: it already exists in Cloudflare.
 provider "cloudflare" {}
 
 variable "cloudflare_account_id" {
@@ -33,9 +34,9 @@ variable "r2_bucket_name" {
   default = "prket-andlos"
 }
 
-variable "d1_database_name" {
-  type    = string
-  default = "prket-andlos"
+variable "cloudflare_database_id" {
+  type        = string
+  description = "UUID of the existing D1 database (Cloudflare dashboard -> Storage & databases -> D1)"
 }
 
 resource "cloudflare_r2_bucket" "assets" {
@@ -43,15 +44,10 @@ resource "cloudflare_r2_bucket" "assets" {
   name       = var.r2_bucket_name
 }
 
-resource "cloudflare_d1_database" "main" {
-  account_id = var.cloudflare_account_id
-  name       = var.d1_database_name
-}
-
 output "r2_bucket_name" {
   value = cloudflare_r2_bucket.assets.name
 }
 
-output "d1_database_id" {
-  value = cloudflare_d1_database.main.id
+output "cloudflare_database_id" {
+  value = var.cloudflare_database_id
 }

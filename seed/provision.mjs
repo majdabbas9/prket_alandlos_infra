@@ -4,7 +4,7 @@
 //
 // Required env:
 //   CLOUDFLARE_API_TOKEN   token with Account > D1 Edit
-//   D1_DATABASE_ID         output of the terraform job
+//   CLOUDFLARE_DATABASE_ID  UUID of the existing D1 database
 //   CLOUDFLARE_ACCOUNT_ID
 //   ACCESS_KEY_ID / SECRET_ACCESS_KEY   R2 S3 credentials (object upload)
 //   ADMIN_USERNAME / ADMIN_PASSWORD           credentials for the D1 admin user
@@ -27,7 +27,7 @@ const env = (name, fallback) => {
 const accountId = env('CLOUDFLARE_ACCOUNT_ID');
 const apiToken = env('CLOUDFLARE_API_TOKEN');
 const bucket = env('R2_BUCKET_NAME', 'prket-andlos');
-const dbId = env('D1_DATABASE_ID');
+const dbId = env('CLOUDFLARE_DATABASE_ID');
 const adminUser = env('ADMIN_USERNAME');
 const adminPass = env('ADMIN_PASSWORD');
 const resetPassword = process.env.RESET_ADMIN_PASSWORD === 'true';

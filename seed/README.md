@@ -1,8 +1,8 @@
-# R2 + D1 provisioning
+# R2 provisioning + D1 seeding
 
 `.github/workflows/provision-storage.yml` runs two jobs:
 
-- **terraform** (`storage/`): creates the R2 bucket and D1 database, adopting them (import) if they already exist. State lives in the R2 bucket `TF_STATE_BUCKET` (default `prket-terraform-state`, created automatically).
+- **terraform** (`storage/`): creates/adopts the R2 bucket. The D1 database is **not** managed by Terraform: it already exists and is referenced by `CLOUDFLARE_DATABASE_ID`. State lives in the R2 bucket `TF_STATE_BUCKET` (default `prket-terraform-state`), which you must create once by hand (the job fails if it is missing).
 - **seed** (`provision.mjs`, idempotent, below).
 
 2. Uploads every image in `seed/images/` to `products/seed-<name>` and writes
@@ -22,7 +22,6 @@ Triggers: push to `master` touching `seed/**`, or manual **Run workflow**.
 | Secret | `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` | same names as the backends' `.env`; R2 read/write key pair (also used by terraform.yml) |
 | Secret | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | D1 admin login |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | already set |
-| Variable (optional) | `R2_BUCKET_NAME`, `D1_DATABASE_NAME` | set `D1_DATABASE_NAME` to the existing prod DB's name, otherwise a new empty DB is created |
-
-If a new D1 database is created, the job summary prints its id — put it in
-`CLOUDFLARE_DATABASE_ID` in the backends' `.env`.
+| Variable | `CLOUDFLARE_DATABASE_ID` | **required** — UUID of the existing D1 database (same name and value as in the backends' `.env`) |
+| Variable | `TF_STATE_BUCKET` | name of the pre-created state bucket (default `prket-terraform-state`) |
+| Variable (optional) | `R2_BUCKET_NAME` | defaults to `prket-andlos` |
