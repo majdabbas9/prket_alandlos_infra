@@ -1,15 +1,18 @@
 name: Power
-# Switch the API containers off/on without deleting anything.
-#   off - the Worker answers 503 and never wakes a container; running containers
+# Switch the site off/on without deleting anything.
+#   off - both Pages projects serve maintenance/ (a "back soon" page), then the
+#         Worker answers 503 and never wakes a container; running containers
 #         get no traffic and stop gracefully (SIGTERM) within sleepAfter (15 min).
-#         Worker, images, Durable Objects and secrets all stay in place.
-#   on  - traffic flows again; containers cold-start on the next request.
-# The flag is the API_DISABLED Worker secret, so it survives Provision deploys.
+#         Worker, images, Durable Objects, secrets and old Pages deployments all stay.
+#   on  - traffic flows again (containers cold-start on the next request), then
+#         each Pages project rolls back to its last real deployment - no rebuild.
+# The API flag is the API_DISABLED Worker secret, so it survives Provision deploys.
+# Note: a Provision run while off publishes the real frontends again.
 on:
   workflow_dispatch:
     inputs:
       state:
-        description: 'Turn the APIs on or off'
+        description: 'Turn the site on or off'
         type: choice
         options: ['off', 'on']
         required: true
@@ -21,6 +24,10 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  PAGES_PROJECTS: prket-alandlos-site prket-alandlos-admin
+  MAINTENANCE_MSG: maintenance
 
 jobs:
   power:
@@ -41,8 +48,42 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # off: swap the frontends first, so nobody sees a half-broken site.
+      - name: Publish maintenance page
+        if: inputs.state == 'off'
+        run: |
+          for project in $PAGES_PROJECTS; do
+            npx wrangler pages deploy ../maintenance --project-name "$project" --branch main \
+              --commit-message "$MAINTENANCE_MSG" --commit-dirty=true
+          done
+          echo "Frontends: maintenance page" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set API_DISABLED
         run: |
           value=$([ "${{ inputs.state }}" = "off" ] && echo true || echo false)
           echo "$value" | npx wrangler secret put API_DISABLED
-          echo "APIs switched ${{ inputs.state }} (API_DISABLED=$value)" >> "$GITHUB_STEP_SUMMARY"
+          echo "API: switched ${{ inputs.state }} (API_DISABLED=$value)" >> "$GITHUB_STEP_SUMMARY"
+
+      # on: point production back at the newest real build (anything not
+      # published by the step above). Skipped if one is already live.
+      - name: Restore frontends
+        if: inputs.state == 'on'
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          for project in $PAGES_PROJECTS; do
+            deployments=$(curl -sf -H "$auth" "$api/$project/deployments?env=production&per_page=25")
+            current=$(jq -r '.result | sort_by(.created_on) | last | .deployment_trigger.metadata.commit_message // ""' <<<"$deployments")
+            if [ "$current" != "$MAINTENANCE_MSG" ]; then
+              echo "$project: already serving a real build"; continue
+            fi
+            target=$(jq -r --arg m "$MAINTENANCE_MSG" '.result
+              | map(select(.deployment_trigger.metadata.commit_message != $m and .latest_stage.status == "success"))
+              | sort_by(.created_on) | last | .id // empty' <<<"$deployments")
+            if [ -z "$target" ]; then
+              echo "::error::$project: no earlier real deployment found - run Provision to rebuild it"; exit 1
+            fi
+            curl -sf -X POST -H "$auth" "$api/$project/deployments/$target/rollback" >/dev/null
+            echo "$project: rolled back to $target"
+            echo "Frontends: $project restored ($target)" >> "$GITHUB_STEP_SUMMARY"
+          done
