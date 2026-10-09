@@ -7,11 +7,11 @@ output "admin_pages_url" {
 }
 
 output "site_custom_domain" {
-  value = cloudflare_pages_domain.site.domain
+  value = cloudflare_pages_domain.site.name
 }
 
 output "admin_custom_domain" {
-  value = cloudflare_pages_domain.admin.domain
+  value = cloudflare_pages_domain.admin.name
 }
 
 output "api_dns_record" {

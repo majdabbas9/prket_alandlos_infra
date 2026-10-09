@@ -4,31 +4,43 @@ resource "cloudflare_pages_project" "main_frontend" {
   name              = "prket-alandlos-site"
   production_branch = "main"
 
-  source {
+  source = {
     type = "github"
-    config {
+    config = {
       owner             = var.github_owner
       repo_name         = var.main_frontend_repo
       production_branch = "main"
     }
   }
 
-  build_config {
+  build_config = {
     build_command   = "npm run build"
     destination_dir = "dist"
   }
 
-  deployment_configs {
-    production {
-      environment_variables = {
-        NODE_VERSION    = "20"
-        VITE_SERVER_URL = "https://api.${var.zone_name}"
+  deployment_configs = {
+    production = {
+      env_vars = {
+        NODE_VERSION = {
+          type  = "plain_text"
+          value = "20"
+        }
+        VITE_SERVER_URL = {
+          type  = "plain_text"
+          value = "https://api.${var.zone_name}"
+        }
       }
     }
-    preview {
-      environment_variables = {
-        NODE_VERSION    = "20"
-        VITE_SERVER_URL = "https://api.${var.zone_name}"
+    preview = {
+      env_vars = {
+        NODE_VERSION = {
+          type  = "plain_text"
+          value = "20"
+        }
+        VITE_SERVER_URL = {
+          type  = "plain_text"
+          value = "https://api.${var.zone_name}"
+        }
       }
     }
   }
@@ -40,33 +52,51 @@ resource "cloudflare_pages_project" "admin_frontend" {
   name              = "prket-alandlos-admin"
   production_branch = "main"
 
-  source {
+  source = {
     type = "github"
-    config {
+    config = {
       owner             = var.github_owner
       repo_name         = var.admin_frontend_repo
       production_branch = "main"
     }
   }
 
-  build_config {
+  build_config = {
     build_command   = "npm run build"
     destination_dir = "dist"
   }
 
-  deployment_configs {
-    production {
-      environment_variables = {
-        NODE_VERSION           = "20"
-        VITE_SERVER_URL        = "https://api.${var.zone_name}"
-        VITE_ADMIN_BACKEND_URL = "https://auth.${var.zone_name}"
+  deployment_configs = {
+    production = {
+      env_vars = {
+        NODE_VERSION = {
+          type  = "plain_text"
+          value = "20"
+        }
+        VITE_SERVER_URL = {
+          type  = "plain_text"
+          value = "https://api.${var.zone_name}"
+        }
+        VITE_ADMIN_BACKEND_URL = {
+          type  = "plain_text"
+          value = "https://auth.${var.zone_name}"
+        }
       }
     }
-    preview {
-      environment_variables = {
-        NODE_VERSION           = "20"
-        VITE_SERVER_URL        = "https://api.${var.zone_name}"
-        VITE_ADMIN_BACKEND_URL = "https://auth.${var.zone_name}"
+    preview = {
+      env_vars = {
+        NODE_VERSION = {
+          type  = "plain_text"
+          value = "20"
+        }
+        VITE_SERVER_URL = {
+          type  = "plain_text"
+          value = "https://api.${var.zone_name}"
+        }
+        VITE_ADMIN_BACKEND_URL = {
+          type  = "plain_text"
+          value = "https://auth.${var.zone_name}"
+        }
       }
     }
   }
@@ -76,11 +106,11 @@ resource "cloudflare_pages_project" "admin_frontend" {
 resource "cloudflare_pages_domain" "site" {
   account_id   = var.cloudflare_account_id
   project_name = cloudflare_pages_project.main_frontend.name
-  domain       = local.site_domain
+  name         = local.site_domain
 }
 
 resource "cloudflare_pages_domain" "admin" {
   account_id   = var.cloudflare_account_id
   project_name = cloudflare_pages_project.admin_frontend.name
-  domain       = local.admin_domain
+  name         = local.admin_domain
 }

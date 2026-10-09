@@ -43,7 +43,7 @@ serialize runs.
    | Variable | `TF_STATE_BUCKET` | `prket-terraform-state` |
 
 5. If `api`/`auth` DNS records already exist in the zone, import them first:
-   `terraform import cloudflare_record.api <zone_id>/<record_id>` (same for
+   `terraform import cloudflare_dns_record.api <zone_id>/<record_id>` (same for
    `auth`) so Terraform adopts instead of creating duplicates.
 
 ## Not managed here (manual, one-time)

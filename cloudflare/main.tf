@@ -29,5 +29,7 @@ terraform {
 provider "cloudflare" {}
 
 data "cloudflare_zone" "main" {
-  name = var.zone_name
+  filter = {
+    name = var.zone_name
+  }
 }
