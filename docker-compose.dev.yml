@@ -1,7 +1,6 @@
 # Dev override: builds all app images from local source instead of pulling from GHCR.
 # Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 # Rebuild after code changes with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-
 services:
   backend:
     build: ../prket_alandlos_backend
