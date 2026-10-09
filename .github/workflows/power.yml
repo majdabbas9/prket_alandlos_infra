@@ -1,5 +1,4 @@
 name: Power
-
 # Switch the API containers off/on without deleting anything.
 #   off - the Worker answers 503 and never wakes a container; running containers
 #         get no traffic and stop gracefully (SIGTERM) within sleepAfter (15 min).
