@@ -153,15 +153,12 @@ jobs:
 
   # Wraps the latest GHCR backend images (containers/*.Dockerfile) and deploys them
   # as Cloudflare Containers behind one Worker. Backend repos don't trigger this:
-  # after pushing a new backend image, re-run it via workflow_dispatch.
+  # after pushing backend changes, re-run it via workflow_dispatch.
   deploy:
     needs: [storage, seed]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment: production
-    permissions:
-      contents: read
-      packages: read
     defaults:
       run:
         working-directory: containers
@@ -174,14 +171,16 @@ jobs:
         with:
           node-version: 22  # wrangler 4 requires Node >= 22
 
-      # GHCR images are private; wrangler builds FROM them with the runner's Docker.
-      # GITHUB_TOKEN can pull them once each package grants this repo Actions read
-      # access (package settings -> Manage Actions access); GHCR_TOKEN overrides.
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+      # The GHCR packages are private, but the backend repos are public: build the
+      # images from source under the same tags, so the FROM lines in
+      # containers/*.Dockerfile resolve to these local images instead of pulling.
+      - name: Build backend images from source
+        working-directory: .
+        run: |
+          for repo in prket_alandlos_backend prket_alandlos_admin_backend; do
+            git clone --depth 1 "https://github.com/${{ github.repository_owner }}/$repo.git" "$RUNNER_TEMP/$repo"
+            docker build -t "ghcr.io/majdabbas9/$repo:latest" "$RUNNER_TEMP/$repo"
+          done
 
       - run: npm ci --no-audit --no-fund
 
