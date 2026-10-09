@@ -1,19 +1,24 @@
-name: Provision R2 + seed D1
+name: Provision
 
-# Step 1 (terraform): create/adopt the R2 bucket. The D1 database already
-#                     exists in Cloudflare and is only referenced by ID.
-# Step 2 (seed): upload sample images to R2 and create the D1 admin user
-#                from the ADMIN_USERNAME / ADMIN_PASSWORD secrets.
+# One workflow for all Cloudflare provisioning:
+#   storage    - terraform: create/adopt the R2 bucket (the D1 database already
+#                exists and is only referenced by CLOUDFLARE_DATABASE_ID)
+#   seed       - upload sample images to R2 and create the D1 admin user
+#   cloudflare - terraform: Pages projects, custom domains, api/auth DNS records
+# PRs run plan only; pushes to master and manual runs apply.
 on:
   push:
     branches: [master]
     paths:
       - 'storage/**'
       - 'seed/**'
-      - '.github/workflows/provision-storage.yml'
+      - 'cloudflare/**'
+      - '.github/workflows/provision.yml'
   pull_request:
     paths:
       - 'storage/**'
+      - 'cloudflare/**'
+      - '.github/workflows/provision.yml'
   workflow_dispatch:
     inputs:
       reset_admin_password:
@@ -21,12 +26,14 @@ on:
         type: boolean
         default: false
 
+# R2-backed state has no lock; serialize all runs.
 concurrency:
-  group: provision-storage
+  group: provision
   cancel-in-progress: false
 
 permissions:
   contents: read
+  pull-requests: write
 
 env:
   CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -35,7 +42,7 @@ env:
   STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'prket-terraform-state' }}
 
 jobs:
-  terraform:
+  storage:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -101,7 +108,7 @@ jobs:
         run: terraform apply -input=false tfplan
 
   seed:
-    needs: terraform
+    needs: storage
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
@@ -144,3 +151,68 @@ jobs:
         env:
           ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
           SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
+
+  cloudflare:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      # Provider auth (see README for required token permissions)
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # R2 S3 backend auth (same creds as ACCESS_KEY_ID / SECRET_ACCESS_KEY in .env)
+      AWS_ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
+      # Terraform variables from repo Variables (non-secret)
+      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_zone_name: ${{ vars.ZONE_NAME }}
+      TF_VAR_vps_ip: ${{ vars.VPS_IP }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init (R2 backend)
+        run: |
+          terraform init \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="key=cloudflare/terraform.tfstate" \
+            -backend-config="endpoints.s3=https://${{ vars.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -input=false -out=tfplan
+          terraform show -no-color tfplan > tfplan.txt
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('cloudflare/tfplan.txt', 'utf8');
+            const body = `#### Terraform Plan (\`cloudflare\`)\n\n<details><summary>Show plan</summary>\n\n\`\`\`hcl\n${plan}\n\`\`\`\n</details>`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Terraform Apply
+        if: github.event_name != 'pull_request'
+        run: terraform apply -input=false tfplan

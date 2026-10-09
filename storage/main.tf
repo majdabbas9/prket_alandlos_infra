@@ -9,7 +9,7 @@ terraform {
   }
 
   # Remote state in R2. bucket/key/endpoint are supplied via -backend-config
-  # (see .github/workflows/provision-storage.yml).
+  # (see .github/workflows/provision.yml).
   backend "s3" {
     region                      = "auto"
     skip_credentials_validation = true

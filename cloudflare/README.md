@@ -7,7 +7,7 @@ repo root `DEPLOYMENT.md`:
   with build config, env vars, and custom domains
 - 2 proxied A records: `api.<zone>` and `auth.<zone>` → VPS IP
 
-**Runs in GitHub Actions** (`.github/workflows/terraform.yml`):
+**Runs in GitHub Actions** (`.github/workflows/provision.yml`):
 
 - PR touching `cloudflare/**` → `terraform plan` posted as a PR comment
 - Merge to `master` (or manual dispatch) → `terraform apply`

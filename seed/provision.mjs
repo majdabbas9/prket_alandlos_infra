@@ -1,6 +1,6 @@
 // Seeds Cloudflare R2 (sample images) and D1 (users table + admin user).
 // The bucket and database are created by Terraform (storage/). Run from GitHub Actions; see
-// .github/workflows/provision-storage.yml.
+// .github/workflows/provision.yml.
 //
 // Required env:
 //   CLOUDFLARE_API_TOKEN   token with Account > D1 Edit
