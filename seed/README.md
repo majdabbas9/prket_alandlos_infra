@@ -1,11 +1,12 @@
 # R2 + D1 provisioning
 
-`.github/workflows/provision-storage.yml` runs `provision.mjs`, which is idempotent:
+`.github/workflows/provision-storage.yml` runs two jobs:
 
-1. Creates the R2 bucket (`R2_BUCKET_NAME`, default `prket-andlos`) if missing.
+- **terraform** (`storage/`): creates the R2 bucket and D1 database, adopting them (import) if they already exist. State lives in the R2 bucket `TF_STATE_BUCKET` (default `prket-terraform-state`, created automatically).
+- **seed** (`provision.mjs`, idempotent, below).
+
 2. Uploads every image in `seed/images/` to `products/seed-<name>` and writes
    `products/products.json` **only if it is missing or empty** (live data is never overwritten).
-3. Creates the D1 database (`D1_DATABASE_NAME`, default `prket-alandlos`) if missing.
 4. Creates the `users` table and the admin user from `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
    An existing user keeps its password unless the run is started manually with
    **reset_admin_password** ticked.

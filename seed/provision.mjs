@@ -1,14 +1,15 @@
-// Idempotent provisioning of Cloudflare R2 (bucket + seed images) and D1
-// (database + users table + admin user). Run from GitHub Actions; see
+// Seeds Cloudflare R2 (sample images) and D1 (users table + admin user).
+// The bucket and database are created by Terraform (storage/). Run from GitHub Actions; see
 // .github/workflows/provision-storage.yml.
 //
 // Required env:
-//   CLOUDFLARE_API_TOKEN   token with Account > D1 Edit and Workers R2 Storage Edit
+//   CLOUDFLARE_API_TOKEN   token with Account > D1 Edit
+//   D1_DATABASE_ID         output of the terraform job
 //   CLOUDFLARE_ACCOUNT_ID
 //   R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY   R2 S3 credentials (object upload)
 //   ADMIN_USERNAME / ADMIN_PASSWORD           credentials for the D1 admin user
 // Optional env:
-//   R2_BUCKET_NAME (default prket-andlos), D1_DATABASE_NAME (default prket-alandlos),
+//   R2_BUCKET_NAME (default prket-andlos)
 //   RESET_ADMIN_PASSWORD=true  overwrite the password if the user already exists
 import { readdir, readFile } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
@@ -26,7 +27,7 @@ const env = (name, fallback) => {
 const accountId = env('CLOUDFLARE_ACCOUNT_ID');
 const apiToken = env('CLOUDFLARE_API_TOKEN');
 const bucket = env('R2_BUCKET_NAME', 'prket-andlos');
-const dbName = env('D1_DATABASE_NAME', 'prket-alandlos');
+const dbId = env('D1_DATABASE_ID');
 const adminUser = env('ADMIN_USERNAME');
 const adminPass = env('ADMIN_PASSWORD');
 const resetPassword = process.env.RESET_ADMIN_PASSWORD === 'true';
@@ -49,15 +50,6 @@ const fail = (what, r) => {
 };
 
 // ---------- R2 ----------
-async function ensureBucket() {
-  const existing = await cf('GET', `/r2/buckets/${bucket}`);
-  if (existing.ok) return console.log(`R2 bucket "${bucket}" already exists`);
-  if (existing.status !== 404) fail('R2 bucket lookup', existing);
-  const created = await cf('POST', '/r2/buckets', { name: bucket });
-  if (!created.ok) fail('R2 bucket creation', created);
-  console.log(`R2 bucket "${bucket}" created`);
-}
-
 const s3 = new S3Client({
   region: 'auto',
   endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
@@ -116,21 +108,7 @@ async function seedProductsJson(products) {
 }
 
 // ---------- D1 ----------
-async function ensureDatabase() {
-  const list = await cf('GET', `/d1/database?name=${encodeURIComponent(dbName)}`);
-  if (!list.ok) fail('D1 lookup', list);
-  const found = (list.data.result ?? []).find((d) => d.name === dbName);
-  if (found) {
-    console.log(`D1 database "${dbName}" already exists (${found.uuid})`);
-    return found.uuid;
-  }
-  const created = await cf('POST', '/d1/database', { name: dbName });
-  if (!created.ok) fail('D1 creation', created);
-  console.log(`D1 database "${dbName}" created (${created.data.result.uuid})`);
-  return created.data.result.uuid;
-}
-
-async function seedDatabase(dbId) {
+async function seedDatabase() {
   const query = async (sql, params = []) => {
     const r = await cf('POST', `/d1/database/${dbId}/query`, { sql, params });
     if (!r.ok) fail('D1 query', r);
@@ -160,16 +138,13 @@ async function seedDatabase(dbId) {
 
 // ---------- main ----------
 console.log('== R2 ==');
-await ensureBucket();
 await seedProductsJson(await seedImages());
 console.log('== D1 ==');
-const dbId = await ensureDatabase();
-await seedDatabase(dbId);
+await seedDatabase();
 
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
-    `### Provisioned\n- R2 bucket: \`${bucket}\`\n- D1 database: \`${dbName}\` (id \`${dbId}\`)\n- Admin user: \`${adminUser}\`\n\n` +
-      `Make sure \`CLOUDFLARE_DATABASE_ID\` in the backends' \`.env\` is \`${dbId}\`.\n`,
+    `### Provisioned\n- R2 bucket: \`${bucket}\`\n- D1 database id: \`${dbId}\`\n- Admin user: \`${adminUser}\`\n\n`
   );
 }

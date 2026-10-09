@@ -1,13 +1,18 @@
 name: Provision R2 + D1
 
-# Creates (if missing) the R2 bucket and D1 database, seeds R2 with sample
-# images, and creates the D1 admin user from the repo secrets. Idempotent.
+# Step 1 (terraform): create/adopt the R2 bucket and D1 database.
+# Step 2 (seed): upload sample images to R2 and create the D1 admin user
+#                from the ADMIN_USERNAME / ADMIN_PASSWORD secrets.
 on:
   push:
     branches: [master]
     paths:
+      - 'storage/**'
       - 'seed/**'
       - '.github/workflows/provision-storage.yml'
+  pull_request:
+    paths:
+      - 'storage/**'
   workflow_dispatch:
     inputs:
       reset_admin_password:
@@ -22,18 +27,104 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+  R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
+  D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME || 'prket-andlos' }}
+  STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'prket-terraform-state' }}
+
 jobs:
-  provision:
+  terraform:
+    runs-on: ubuntu-latest
+    outputs:
+      d1_database_id: ${{ steps.out.outputs.d1_database_id }}
+    defaults:
+      run:
+        working-directory: storage
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_r2_bucket_name: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
+      TF_VAR_d1_database_name: ${{ vars.D1_DATABASE_NAME || 'prket-andlos' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
+
+      - name: Ensure Terraform state bucket exists
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api/$STATE_BUCKET")
+          if [ "$code" = "404" ]; then
+            curl -sf -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' \
+              -d "{\"name\":\"$STATE_BUCKET\"}" "$api" >/dev/null
+            echo "Created state bucket $STATE_BUCKET"
+          elif [ "$code" != "200" ]; then
+            echo "State bucket lookup failed (HTTP $code)"; exit 1
+          fi
+
+      - name: Terraform init
+        run: |
+          {
+            echo "bucket    = \"$STATE_BUCKET\""
+            echo "key       = \"storage/terraform.tfstate\""
+            echo "endpoints = { s3 = \"https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com\" }"
+          } > backend.hcl
+          terraform init -backend-config=backend.hcl
+
+      - name: Terraform fmt / validate
+        run: |
+          terraform fmt -check
+          terraform validate
+
+      # The prod bucket and database already exist: adopt them into state
+      # instead of failing on "already exists".
+      - name: Import existing resources
+        if: github.event_name != 'pull_request'
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          state=$(terraform state list || true)
+
+          if ! grep -qx 'cloudflare_r2_bucket.assets' <<<"$state" \
+             && [ "$(curl -s -o /dev/null -w '%{http_code}' -H "$auth" "$api/r2/buckets/$R2_BUCKET_NAME")" = "200" ]; then
+            terraform import cloudflare_r2_bucket.assets "$CLOUDFLARE_ACCOUNT_ID/$R2_BUCKET_NAME/default"
+          fi
+
+          if ! grep -qx 'cloudflare_d1_database.main' <<<"$state"; then
+            id=$(curl -s -H "$auth" "$api/d1/database?name=$D1_DATABASE_NAME" \
+              | jq -r --arg n "$D1_DATABASE_NAME" '.result[]? | select(.name==$n) | .uuid')
+            if [ -n "$id" ]; then
+              terraform import cloudflare_d1_database.main "$CLOUDFLARE_ACCOUNT_ID/$id"
+            fi
+          fi
+
+      - name: Terraform plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        if: github.event_name != 'pull_request'
+        run: terraform apply -input=false tfplan
+
+      - name: Read outputs
+        id: out
+        if: github.event_name != 'pull_request'
+        run: echo "d1_database_id=$(terraform output -raw d1_database_id)" >> "$GITHUB_OUTPUT"
+
+  seed:
+    needs: terraform
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: seed
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
-      D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME || 'prket-alandlos' }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,11 +134,13 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      - name: Provision R2 and D1
+      - name: Seed R2 images and D1 admin user
         run: node provision.mjs
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          # D1 admin credentials come from repo secrets (never hardcoded)
+          D1_DATABASE_ID: ${{ needs.terraform.outputs.d1_database_id }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           RESET_ADMIN_PASSWORD: ${{ inputs.reset_admin_password }}
@@ -66,3 +159,6 @@ jobs:
           console.log(`Images in R2 under products/: ${imgs.length}`);
           if (imgs.length === 0) { console.error('No images found in R2'); process.exit(1); }
           JS
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
