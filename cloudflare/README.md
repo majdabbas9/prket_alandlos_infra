@@ -64,10 +64,12 @@ export TF_VAR_cloudflare_account_id=...
 export TF_VAR_zone_name=...
 export TF_VAR_vps_ip=...
 
-terraform init \
-  -backend-config="bucket=prket-terraform-state" \
-  -backend-config="key=cloudflare/terraform.tfstate" \
-  -backend-config="endpoints.s3=https://$TF_VAR_cloudflare_account_id.r2.cloudflarestorage.com"
+printf '%s\n' \
+  'bucket    = "prket-terraform-state"' \
+  'key       = "cloudflare/terraform.tfstate"' \
+  "endpoints = { s3 = \"https://$TF_VAR_cloudflare_account_id.r2.cloudflarestorage.com\" }" \
+  > backend.hcl
+terraform init -backend-config=backend.hcl
 
 terraform plan
 ```

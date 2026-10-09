@@ -184,10 +184,12 @@ jobs:
 
       - name: Terraform Init (R2 backend)
         run: |
-          terraform init \
-            -backend-config="bucket=$STATE_BUCKET" \
-            -backend-config="key=cloudflare/terraform.tfstate" \
-            -backend-config="endpoints.s3=https://${{ vars.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          {
+            echo "bucket    = \"$STATE_BUCKET\""
+            echo "key       = \"cloudflare/terraform.tfstate\""
+            echo "endpoints = { s3 = \"https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com\" }"
+          } > backend.hcl
+          terraform init -backend-config=backend.hcl
 
       - name: Terraform Validate
         run: terraform validate
