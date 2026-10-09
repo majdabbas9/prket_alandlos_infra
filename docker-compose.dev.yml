@@ -1,0 +1,27 @@
+# Dev override: builds all app images from local source instead of pulling from GHCR.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Rebuild after code changes with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+services:
+  backend:
+    build: ../prket_alandlos_backend
+    image: prket_alandlos_backend:dev
+
+  frontend:
+    build:
+      context: ../prket_alandlos_frontend
+      args:
+        VITE_SERVER_URL: http://localhost:8080
+    image: prket_alandlos_frontend:dev
+
+  admin-frontend:
+    build:
+      context: ../prket_alandlos_admin_frontend
+      args:
+        VITE_SERVER_URL: http://localhost:8080
+        VITE_ADMIN_BACKEND_URL: http://localhost:5001
+    image: prket_alandlos_admin_frontend:dev
+
+  admin-backend:
+    build: ../prket_alandlos_admin_backend
+    image: prket_alandlos_admin_backend:dev

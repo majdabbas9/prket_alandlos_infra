@@ -1,0 +1,61 @@
+# API-only compose for the production VPS (frontends live on Cloudflare Pages).
+# Explicit project name so it can coexist with the old docker-compose.yml stack during cutover.
+# Usage: docker compose -f docker-compose.api.yml up -d
+name: prket-alandlos-api
+
+services:
+  # Main Node.js Express API — reachable only through Caddy (no host port)
+  backend:
+    image: ghcr.io/majdabbas9/prket_alandlos_backend:latest
+    container_name: prket_alandlos_backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - ADMIN_BACKEND_URL=http://admin-backend:5001
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - prket_network
+
+  # Auth service — internal-only, except through Caddy (auth subdomain)
+  admin-backend:
+    image: ghcr.io/majdabbas9/prket_alandlos_admin_backend:latest
+    container_name: prket_alandlos_admin_backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=5001
+    networks:
+      - prket_network
+
+  # Redis cache — internal only, no host port published
+  redis:
+    image: redis:alpine
+    container_name: prket_alandlos_redis
+    restart: unless-stopped
+    networks:
+      - prket_network
+
+  # Entry reverse proxy: routes api/auth subdomains to the right service.
+  # Cloudflare terminates TLS at the edge; Caddy serves plain HTTP on the origin.
+  caddy:
+    image: caddy:2-alpine
+    container_name: prket_alandlos_caddy
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - backend
+      - admin-backend
+    networks:
+      - prket_network
+
+networks:
+  prket_network:
+    driver: bridge

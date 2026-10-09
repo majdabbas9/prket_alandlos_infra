@@ -1,0 +1,15 @@
+# Reverse proxy for Prket Alandlos (Cloudflare terminates TLS at the edge).
+# Replace YOURDOMAIN.com with the real domain before deploying.
+
+http://api.YOURDOMAIN.com {
+    reverse_proxy backend:8080
+}
+
+http://auth.YOURDOMAIN.com {
+    reverse_proxy admin-backend:5001
+}
+
+# Default: reject anything that hits the IP directly
+:80 {
+    respond 404
+}

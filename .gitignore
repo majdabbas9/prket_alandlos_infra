@@ -1,1 +1,10 @@
 .env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# Seed script
+seed/node_modules/

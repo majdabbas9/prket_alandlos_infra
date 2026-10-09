@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and fill in. Never commit terraform.tfvars.
+cloudflare_account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+zone_name             = "YOURDOMAIN.com"
+vps_ip                = "1.2.3.4"
+
+# Optional overrides (defaults shown):
+# github_owner        = "majdabbas9"
+# main_frontend_repo  = "prket_alandlos_frontend"
+# admin_frontend_repo = "prket_alandlos_admin_frontend"
+# site_domain         = "site.YOURDOMAIN.com"    # default: site.<zone_name>
+# admin_domain        = "admin.YOURDOMAIN.com"   # default: admin.<zone_name>

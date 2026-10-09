@@ -1,0 +1,68 @@
+name: Provision R2 + D1
+
+# Creates (if missing) the R2 bucket and D1 database, seeds R2 with sample
+# images, and creates the D1 admin user from the repo secrets. Idempotent.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'seed/**'
+      - '.github/workflows/provision-storage.yml'
+  workflow_dispatch:
+    inputs:
+      reset_admin_password:
+        description: 'Overwrite the admin password if the user already exists'
+        type: boolean
+        default: false
+
+concurrency:
+  group: provision-storage
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: seed
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
+      D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME || 'prket-alandlos' }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Provision R2 and D1
+        run: node provision.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # D1 admin credentials come from repo secrets (never hardcoded)
+          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          RESET_ADMIN_PASSWORD: ${{ inputs.reset_admin_password }}
+
+      - name: Verify R2 contains images
+        run: |
+          node --input-type=module <<'JS'
+          import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
+          const s3 = new S3Client({
+            region: 'auto',
+            endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+            credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY },
+          });
+          const r = await s3.send(new ListObjectsV2Command({ Bucket: process.env.R2_BUCKET_NAME, Prefix: 'products/' }));
+          const imgs = (r.Contents ?? []).filter((o) => /\.(jpe?g|png|webp)$/i.test(o.Key));
+          console.log(`Images in R2 under products/: ${imgs.length}`);
+          if (imgs.length === 0) { console.error('No images found in R2'); process.exit(1); }
+          JS
