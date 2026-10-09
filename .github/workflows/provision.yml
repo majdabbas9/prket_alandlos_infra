@@ -5,6 +5,7 @@ name: Provision
 #                exists and is only referenced by CLOUDFLARE_DATABASE_ID)
 #   seed       - upload sample images to R2 and create the D1 admin user
 #   deploy     - deploy both APIs to Cloudflare Containers (containers/)
+#   frontends  - build both frontends and publish them to Cloudflare Pages
 # (cloudflare/ - Pages + DNS terraform - is not wired into CI for now.)
 # PRs run plan only; pushes to master and manual runs apply.
 on:
@@ -191,11 +192,25 @@ jobs:
 
       # Set after deploy so the first deploy can create the Worker; changing
       # secrets rolls a new version, so containers restart with the new values.
+      # JWT_SECRET only lives on the Worker: without a GitHub secret it is
+      # generated once and then left alone (rotating it logs every admin out).
       - name: Sync secrets
         run: |
           set -o pipefail
+          if [ -z "$JWT_SECRET" ]; then
+            if npx wrangler secret list --format json | grep -q '"JWT_SECRET"'; then
+              echo "JWT_SECRET: keeping the value already on the Worker"
+              export SKIP_JWT=1
+            else
+              echo "JWT_SECRET: generating a new one"
+              JWT_SECRET=$(openssl rand -hex 48)
+              echo "::add-mask::$JWT_SECRET"
+              export JWT_SECRET
+            fi
+          fi
           node -e '
-            const keys = ["ACCESS_KEY_ID","SECRET_ACCESS_KEY","CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_DATABASE_ID","D1_API_TOKEN","JWT_SECRET"];
+            const keys = ["ACCESS_KEY_ID","SECRET_ACCESS_KEY","CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_DATABASE_ID","D1_API_TOKEN"];
+            if (!process.env.SKIP_JWT) keys.push("JWT_SECRET");
             const missing = keys.filter((k) => !process.env[k]);
             if (missing.length) { console.error("Missing: " + missing.join(", ")); process.exit(1); }
             console.log(JSON.stringify(Object.fromEntries(keys.map((k) => [k, process.env[k]]))));
@@ -207,3 +222,51 @@ jobs:
           CLOUDFLARE_DATABASE_ID: ${{ vars.CLOUDFLARE_DATABASE_ID }}
           D1_API_TOKEN: ${{ secrets.D1_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+  # Static SPAs on Cloudflare Pages (free). VITE_* URLs are baked in at build
+  # time, so they point at the API Worker. Like deploy, frontend repos don't
+  # trigger this: re-run via workflow_dispatch after pushing frontend changes.
+  frontends:
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: prket_alandlos_frontend
+            project: prket-alandlos-site
+          - repo: prket_alandlos_admin_frontend
+            project: prket-alandlos-admin
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      API_URL: ${{ vars.API_URL || 'https://prket-alandlos-api.majd-abbas222.workers.dev' }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22  # wrangler 4 requires Node >= 22
+
+      - name: Build
+        run: |
+          git clone --depth 1 "https://github.com/${{ github.repository_owner }}/${{ matrix.repo }}.git" app
+          cd app
+          npm ci --no-audit --no-fund
+          npm run build
+        env:
+          VITE_SERVER_URL: ${{ env.API_URL }}
+          VITE_ADMIN_BACKEND_URL: ${{ env.API_URL }}
+
+      - name: Create Pages project if missing
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/${{ matrix.project }}")
+          if [ "$code" = "404" ]; then
+            npx wrangler@4.149.0 pages project create "${{ matrix.project }}" --production-branch main
+          elif [ "$code" != "200" ]; then
+            echo "Pages API returned HTTP $code (token needs Account > Cloudflare Pages: Edit)"; exit 1
+          fi
+
+      - name: Deploy to Pages
+        working-directory: app
+        run: |
+          npx wrangler@4.149.0 pages deploy dist --project-name "${{ matrix.project }}" --branch main --commit-dirty=true
+          echo "${{ matrix.repo }} -> https://${{ matrix.project }}.pages.dev" >> "$GITHUB_STEP_SUMMARY"
