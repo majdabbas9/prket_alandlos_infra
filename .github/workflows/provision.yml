@@ -193,6 +193,7 @@ jobs:
       # secrets rolls a new version, so containers restart with the new values.
       - name: Sync secrets
         run: |
+          set -o pipefail
           node -e '
             const keys = ["ACCESS_KEY_ID","SECRET_ACCESS_KEY","CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_DATABASE_ID","D1_API_TOKEN","JWT_SECRET"];
             const missing = keys.filter((k) => !process.env[k]);
