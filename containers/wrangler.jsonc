@@ -1,0 +1,46 @@
+// One Worker fronting both APIs on Cloudflare Containers.
+//   /auth/*  -> AdminBackend container (port 5001)
+//   anything else (/api/*) -> Backend container (port 8080)
+// Sizes picked from `docker stats` on the local stack:
+//   backend        idle ~90 MiB, peak ~135 MiB under load, ~1 core burst; sharp
+//                  resizes 10 MB uploads + embedded Redis (capped 128 MB)  -> basic
+//   admin-backend  idle/peak ~53 MiB, near-zero CPU (JWT verify, bcrypt on login) -> lite
+// Deployed by .github/workflows/provision.yml (deploy job).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "prket-alandlos-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "Backend",
+      "image": "./backend.Dockerfile",
+      "instance_type": "basic", // 1/4 vCPU, 1 GiB RAM, 4 GB disk
+      // Single instance: each instance has its own in-container Redis, so more
+      // than one would serve stale caches after a product update.
+      "max_instances": 1
+    },
+    {
+      "class_name": "AdminBackend",
+      "image": "./admin-backend.Dockerfile",
+      "instance_type": "lite", // 1/16 vCPU, 256 MiB RAM, 2 GB disk
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "BACKEND", "class_name": "Backend" },
+      { "name": "ADMIN_BACKEND", "class_name": "AdminBackend" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Backend", "AdminBackend"] }
+  ],
+  "vars": {
+    "R2_BUCKET_NAME": "prket-andlos"
+  }
+  // Secrets (set by CI via `wrangler secret bulk`):
+  //   ACCESS_KEY_ID, SECRET_ACCESS_KEY, CLOUDFLARE_ACCOUNT_ID,
+  //   CLOUDFLARE_DATABASE_ID, D1_API_TOKEN, JWT_SECRET
+}

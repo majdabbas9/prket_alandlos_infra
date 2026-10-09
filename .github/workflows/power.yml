@@ -1,0 +1,49 @@
+name: Power
+
+# Switch the API containers off/on without deleting anything.
+#   off - the Worker answers 503 and never wakes a container; running containers
+#         get no traffic and stop gracefully (SIGTERM) within sleepAfter (15 min).
+#         Worker, images, Durable Objects and secrets all stay in place.
+#   on  - traffic flows again; containers cold-start on the next request.
+# The flag is the API_DISABLED Worker secret, so it survives Provision deploys.
+on:
+  workflow_dispatch:
+    inputs:
+      state:
+        description: 'Turn the APIs on or off'
+        type: choice
+        options: ['off', 'on']
+        required: true
+
+# Don't race a Provision deploy.
+concurrency:
+  group: provision
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  power:
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: containers
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Set API_DISABLED
+        run: |
+          value=$([ "${{ inputs.state }}" = "off" ] && echo true || echo false)
+          echo "$value" | npx wrangler secret put API_DISABLED
+          echo "APIs switched ${{ inputs.state }} (API_DISABLED=$value)" >> "$GITHUB_STEP_SUMMARY"
