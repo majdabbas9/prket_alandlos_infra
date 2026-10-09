@@ -172,7 +172,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22  # wrangler 4 requires Node >= 22
 
       # GHCR images are private; wrangler builds FROM them with the runner's Docker.
       # GITHUB_TOKEN can pull them once each package grants this repo Actions read
