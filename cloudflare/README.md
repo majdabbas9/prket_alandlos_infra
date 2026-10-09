@@ -35,8 +35,8 @@ serialize runs.
    | Kind | Name | Value |
    |---|---|---|
    | Secret | `CLOUDFLARE_API_TOKEN` | token from step 2 |
-   | Secret | `R2_ACCESS_KEY_ID` | = `ACCESS_KEY_ID` from `../.env` |
-   | Secret | `R2_SECRET_ACCESS_KEY` | = `SECRET_ACCESS_KEY` from `../.env` |
+   | Secret | `ACCESS_KEY_ID` | same name as in `../.env` |
+   | Secret | `SECRET_ACCESS_KEY` | same name as in `../.env` |
    | Variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
    | Variable | `ZONE_NAME` | e.g. `YOURDOMAIN.com` |
    | Variable | `VPS_IP` | public IP of the API VPS |

@@ -6,7 +6,7 @@
 //   CLOUDFLARE_API_TOKEN   token with Account > D1 Edit
 //   D1_DATABASE_ID         output of the terraform job
 //   CLOUDFLARE_ACCOUNT_ID
-//   R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY   R2 S3 credentials (object upload)
+//   ACCESS_KEY_ID / SECRET_ACCESS_KEY   R2 S3 credentials (object upload)
 //   ADMIN_USERNAME / ADMIN_PASSWORD           credentials for the D1 admin user
 // Optional env:
 //   R2_BUCKET_NAME (default prket-andlos)
@@ -53,7 +53,7 @@ const fail = (what, r) => {
 const s3 = new S3Client({
   region: 'auto',
   endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-  credentials: { accessKeyId: env('R2_ACCESS_KEY_ID'), secretAccessKey: env('R2_SECRET_ACCESS_KEY') },
+  credentials: { accessKeyId: env('ACCESS_KEY_ID'), secretAccessKey: env('SECRET_ACCESS_KEY') },
 });
 
 const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };

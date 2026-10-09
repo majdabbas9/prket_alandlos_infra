@@ -19,7 +19,7 @@ Triggers: push to `master` touching `seed/**`, or manual **Run workflow**.
 | Kind | Name | Notes |
 |---|---|---|
 | Secret | `CLOUDFLARE_API_TOKEN` | needs **Account → D1 → Edit** and **Workers R2 Storage → Edit** (add to the Terraform token or create a second one) |
-| Secret | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | already used by terraform.yml |
+| Secret | `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` | same names as the backends' `.env`; R2 read/write key pair (also used by terraform.yml) |
 | Secret | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | D1 admin login |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | already set |
 | Variable (optional) | `R2_BUCKET_NAME`, `D1_DATABASE_NAME` | set `D1_DATABASE_NAME` to the existing prod DB's name, otherwise a new empty DB is created |
