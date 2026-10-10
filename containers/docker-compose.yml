@@ -1,0 +1,52 @@
+# Local run of the Cloudflare Containers images (the *.Dockerfile wrappers).
+# Cloudflare ignores this file: in production the same env comes from src/index.ts (envVars)
+# and the size limits from instance_type in wrangler.jsonc. Keep them in sync.
+# Usage (from containers/): docker compose up -d --build
+name: prket-alandlos-containers
+
+services:
+  # Main API + embedded Redis cache
+  backend:
+    build:
+      context: .
+      dockerfile: backend.Dockerfile
+    container_name: prket_alandlos_cf_backend
+    env_file:
+      - ../.env
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - REDIS_URL=redis://127.0.0.1:6379
+      - REDIS_MAXMEMORY=128mb
+      - REDIS_MAXMEMORY_POLICY=allkeys-lru
+      - ADMIN_BACKEND_URL=http://admin-backend:5001
+    ports:
+      - "8080:8080"
+    # Matches instance_type "basic": 1/4 vCPU, 1 GiB RAM
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 1g
+    depends_on:
+      - admin-backend
+
+  # Auth service
+  admin-backend:
+    build:
+      context: .
+      dockerfile: admin-backend.Dockerfile
+    container_name: prket_alandlos_cf_admin_backend
+    env_file:
+      - ../.env
+    environment:
+      - NODE_ENV=production
+      - PORT=5001
+    ports:
+      - "5001:5001"
+    # Matches instance_type "lite": 1/16 vCPU, 256 MiB RAM
+    deploy:
+      resources:
+        limits:
+          cpus: "0.0625"
+          memory: 256m

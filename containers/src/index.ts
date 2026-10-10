@@ -34,6 +34,11 @@ export class Backend extends Container<Env> {
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
     this.envVars = {
+      NODE_ENV: 'production',
+      PORT: String(this.defaultPort),
+      REDIS_URL: 'redis://127.0.0.1:6379', // Redis runs inside this container
+      REDIS_MAXMEMORY: '128mb',
+      REDIS_MAXMEMORY_POLICY: 'allkeys-lru',
       ACCESS_KEY_ID: env.ACCESS_KEY_ID,
       SECRET_ACCESS_KEY: env.SECRET_ACCESS_KEY,
       R2_BUCKET_NAME: env.R2_BUCKET_NAME,
@@ -51,6 +56,8 @@ export class AdminBackend extends Container<Env> {
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
     this.envVars = {
+      NODE_ENV: 'production',
+      PORT: String(this.defaultPort),
       CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID,
       CLOUDFLARE_DATABASE_ID: env.CLOUDFLARE_DATABASE_ID,
       CLOUDFLARE_API_TOKEN: env.D1_API_TOKEN,
