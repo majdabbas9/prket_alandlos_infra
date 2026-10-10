@@ -11,7 +11,10 @@
   "name": "prket-alandlos-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  "observability": { "enabled": true },
+  "observability": {
+    "enabled": true,
+    "traces": { "enabled": true }
+  },
   "containers": [
     {
       "class_name": "Backend",
