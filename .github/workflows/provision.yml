@@ -40,6 +40,9 @@ env:
   R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
   CLOUDFLARE_DATABASE_ID: ${{ vars.CLOUDFLARE_DATABASE_ID }}
   STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'prket-terraform-state' }}
+  # Optional public CDN hostname for the bucket (e.g. images.example.com) and its zone ID.
+  # Unset = bucket stays private and images are served by the API Worker instead.
+  R2_PUBLIC_DOMAIN: ${{ vars.R2_PUBLIC_DOMAIN }}
 
 jobs:
   storage:
@@ -56,6 +59,8 @@ jobs:
       TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       TF_VAR_r2_bucket_name: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
       TF_VAR_cloudflare_database_id: ${{ vars.CLOUDFLARE_DATABASE_ID }}
+      TF_VAR_r2_public_domain: ${{ vars.R2_PUBLIC_DOMAIN }}
+      TF_VAR_r2_public_zone_id: ${{ vars.R2_PUBLIC_ZONE_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -187,8 +192,14 @@ jobs:
 
       - run: npx tsc --noEmit
 
+      # With a public bucket domain, the backend hands out CDN image URLs (R2_PUBLIC_URL)
       - name: Deploy Worker + containers
-        run: npx wrangler deploy
+        run: |
+          if [ -n "$R2_PUBLIC_DOMAIN" ]; then
+            npx wrangler deploy --var "R2_PUBLIC_URL:https://$R2_PUBLIC_DOMAIN"
+          else
+            npx wrangler deploy
+          fi
 
       # Set after deploy so the first deploy can create the Worker; changing
       # secrets rolls a new version, so containers restart with the new values.

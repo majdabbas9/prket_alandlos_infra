@@ -39,9 +39,38 @@ variable "cloudflare_database_id" {
   description = "UUID of the existing D1 database (Cloudflare dashboard -> Storage & databases -> D1)"
 }
 
+variable "r2_public_domain" {
+  type        = string
+  default     = ""
+  description = "Optional hostname (e.g. images.example.com) to serve the bucket publicly through Cloudflare's CDN. Must be in a zone on this account. Empty = bucket stays private."
+}
+
+variable "r2_public_zone_id" {
+  type        = string
+  default     = ""
+  description = "Zone ID of r2_public_domain's zone (required when r2_public_domain is set)"
+}
+
 resource "cloudflare_r2_bucket" "assets" {
   account_id = var.cloudflare_account_id
   name       = var.r2_bucket_name
+}
+
+# Makes every object in the bucket publicly readable at https://<r2_public_domain>/<key>.
+# Cloudflare creates the DNS record and certificate, and caches responses at the edge.
+resource "cloudflare_r2_custom_domain" "assets" {
+  count = var.r2_public_domain == "" ? 0 : 1
+
+  account_id  = var.cloudflare_account_id
+  bucket_name = cloudflare_r2_bucket.assets.name
+  domain      = var.r2_public_domain
+  zone_id     = var.r2_public_zone_id
+  enabled     = true
+  min_tls     = "1.2"
+}
+
+output "r2_public_url" {
+  value = var.r2_public_domain == "" ? "" : "https://${var.r2_public_domain}"
 }
 
 output "r2_bucket_name" {

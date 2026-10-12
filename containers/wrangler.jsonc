@@ -1,4 +1,5 @@
 // One Worker fronting both APIs on Cloudflare Containers.
+//   GET /api/products/photo?key=products/... -> served by this Worker from R2 (BUCKET binding)
 //   /auth/*  -> AdminBackend container (port 5001)
 //   anything else (/api/*) -> Backend container (port 8080)
 // Sizes picked from `docker stats` on the local stack:
@@ -37,11 +38,16 @@
       { "name": "ADMIN_BACKEND", "class_name": "AdminBackend" }
     ]
   },
+  "r2_buckets": [
+    { "binding": "BUCKET", "bucket_name": "prket-andlos" }
+  ],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Backend", "AdminBackend"] }
   ],
   "vars": {
     "R2_BUCKET_NAME": "prket-andlos"
+    // R2_PUBLIC_URL is added by CI (`wrangler deploy --var`) when the R2_PUBLIC_DOMAIN
+    // GitHub variable is set - see .github/workflows/provision.yml
   }
   // Secrets (set by CI via `wrangler secret bulk`):
   //   ACCESS_KEY_ID, SECRET_ACCESS_KEY, CLOUDFLARE_ACCOUNT_ID,
