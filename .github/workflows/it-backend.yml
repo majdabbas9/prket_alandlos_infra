@@ -1,0 +1,40 @@
+name: IT - Backend
+
+# Integration tests against the deployed main backend (/api/* on the API Worker).
+# Runs after every successful Provision deploy, or manually. Tests: it/backend.test.mjs
+on:
+  workflow_run:
+    workflows: [Provision]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: it-backend
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  it:
+    # Provision only deploys on push/dispatch; PR runs are plan-only.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run integration tests
+        working-directory: it
+        run: node --test --test-reporter=spec --test-reporter-destination=stdout backend.test.mjs
+        env:
+          API_URL: ${{ vars.API_URL || 'https://prket-alandlos-api.majd-abbas222.workers.dev' }}
+          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
