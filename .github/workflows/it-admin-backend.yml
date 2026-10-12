@@ -1,26 +1,20 @@
 name: IT - Admin Backend
 
 # Integration tests against the deployed admin backend (/auth/* on the API Worker).
-# Runs after every successful Provision deploy, or manually. Tests: it/admin-backend.test.mjs
+# Called by Provision right after its deploy job, or run manually. Tests: it/admin-backend.test.mjs
 on:
-  workflow_run:
-    workflows: [Provision]
-    types: [completed]
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
   group: it-admin-backend
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   it:
-    # Provision only deploys on push/dispatch; PR runs are plan-only.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request')
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 15

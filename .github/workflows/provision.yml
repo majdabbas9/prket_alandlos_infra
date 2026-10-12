@@ -5,6 +5,8 @@ name: Provision
 #                exists and is only referenced by CLOUDFLARE_DATABASE_ID)
 #   seed       - upload sample images to R2 and create the D1 admin user
 #   deploy     - deploy both APIs to Cloudflare Containers (containers/)
+#   it-*       - integration tests against the deployed APIs (it-backend.yml,
+#                it-admin-backend.yml; also runnable on their own)
 #   frontends  - build both frontends and publish them to Cloudflare Pages
 # (cloudflare/ - Pages + DNS terraform - is not wired into CI for now.)
 # PRs run plan only; pushes to master and manual runs apply.
@@ -233,6 +235,17 @@ jobs:
           CLOUDFLARE_DATABASE_ID: ${{ vars.CLOUDFLARE_DATABASE_ID }}
           D1_API_TOKEN: ${{ secrets.D1_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+  # Integration tests against the APIs just deployed. Skipped with deploy on PRs.
+  it-backend:
+    needs: deploy
+    uses: ./.github/workflows/it-backend.yml
+    secrets: inherit
+
+  it-admin-backend:
+    needs: deploy
+    uses: ./.github/workflows/it-admin-backend.yml
+    secrets: inherit
 
   # Static SPAs on Cloudflare Pages (free). VITE_* URLs are baked in at build
   # time, so they point at the API Worker. Like deploy, frontend repos don't
