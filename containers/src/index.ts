@@ -31,9 +31,14 @@ export class Backend extends Container<Env> {
   sleepAfter = '15m';
   enableInternet = true; // R2
 
-  static outboundByHost = {
-    [AUTH_HOST]: (req: Request, env: Env) => getContainer(env.ADMIN_BACKEND).fetch(req),
-  };
+  // Must be an assignment, not a `static outboundByHost = ...` field: the library registers
+  // handlers through an inherited static setter, and an ES2022 class field defines an own
+  // property that skips it - auth.internal then leaks to the internet and gets a 530.
+  static {
+    this.outboundByHost = {
+      [AUTH_HOST]: (req: Request, env: Env) => getContainer(env.ADMIN_BACKEND).fetch(req),
+    };
+  }
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
