@@ -5,8 +5,11 @@
 - **terraform** (`storage/`): creates/adopts the R2 bucket. The D1 database is **not** managed by Terraform: it already exists and is referenced by `CLOUDFLARE_DATABASE_ID`. State lives in the R2 bucket `TF_STATE_BUCKET` (default `prket-terraform-state`), which you must create once by hand (the job fails if it is missing).
 - **seed** (`provision.mjs`, idempotent, below).
 
-2. Uploads every image in `seed/images/` to `products/seed-<name>` and writes
-   `products/products.json` **only if it is missing or empty** (live data is never overwritten).
+2. Converts every image in `seed/images/` into the same WebP variants the backend makes for
+   admin uploads — `products/seed-<name>.webp` (max 1600px) and `products/seed-<name>-thumb.webp`
+   (600px, used by product cards) — and writes `products/products.json` **only if it is missing
+   or empty** (live data is never overwritten). In an existing catalogue, seed products that
+   still have no `thumbKey` are pointed at the new variants.
 4. Creates the `users` table and the admin user from `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
    An existing user keeps its password unless the run is started manually with
    **reset_admin_password** ticked.

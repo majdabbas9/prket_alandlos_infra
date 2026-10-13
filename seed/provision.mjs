@@ -1,4 +1,4 @@
-// Seeds Cloudflare R2 (sample images) and D1 (users table + admin user).
+// Seeds Cloudflare R2 (sample images + thumbnails) and D1 (users table + admin user).
 // The bucket and database are created by Terraform (storage/). Run from GitHub Actions; see
 // .github/workflows/provision.yml.
 //
@@ -16,6 +16,7 @@ import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
+import sharp from 'sharp';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 
 const env = (name, fallback) => {
@@ -60,50 +61,82 @@ const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
 const titleOf = (file) =>
   path.parse(file).name.replace(/^parquet-/, 'Parquet Design ').replace(/^showroom-/, 'Showroom Project ');
 
+// Same variants the backend makes for admin uploads (prket_alandlos_backend/src/models/Product.js):
+// a large image for the detail view and a thumbnail for product cards.
+const LARGE_WIDTH = 1600;
+const THUMB_WIDTH = 600;
+const resizeImage = (input) => {
+  const variant = (width, quality) =>
+    sharp(input).rotate().resize({ width, withoutEnlargement: true }).webp({ quality }).toBuffer();
+  return Promise.all([variant(LARGE_WIDTH, 82), variant(THUMB_WIDTH, 75)]);
+};
+
+const put = (Key, Body, ContentType) => s3.send(new PutObjectCommand({ Bucket: bucket, Key, Body, ContentType }));
+
 async function seedImages() {
   const files = (await readdir(imagesDir)).filter((f) => MIME[path.extname(f).toLowerCase()]).sort();
   const products = [];
   for (const file of files) {
     // Fixed keys -> re-runs overwrite instead of piling up duplicates.
-    const key = `products/seed-${file}`;
-    await s3.send(new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: await readFile(path.join(imagesDir, file)),
-      ContentType: MIME[path.extname(file).toLowerCase()],
-    }));
-    console.log(`  uploaded ${key}`);
+    const { name } = path.parse(file);
+    const original = await readFile(path.join(imagesDir, file));
+    let imageKey = `products/seed-${name}.webp`;
+    let thumbKey = `products/seed-${name}-thumb.webp`;
+    try {
+      const [large, thumb] = await resizeImage(original);
+      await Promise.all([put(imageKey, large, 'image/webp'), put(thumbKey, thumb, 'image/webp')]);
+      console.log(`  uploaded ${imageKey} (${large.length} B) + ${thumbKey} (${thumb.length} B)`);
+    } catch (e) {
+      // Like the backend: an image sharp can't decode is stored as-is and used for both
+      console.warn(`  could not resize ${file} (${e.message}); uploading original`);
+      imageKey = thumbKey = `products/seed-${file}`;
+      await put(imageKey, original, MIME[path.extname(file).toLowerCase()]);
+      console.log(`  uploaded ${imageKey}`);
+    }
     products.push({
-      id: `prod_seed_${path.parse(file).name}`,
+      id: `prod_seed_${name}`,
       title: titleOf(file),
       price: 0,
       category: file.startsWith('showroom-') ? 'Projects' : 'Parquet',
       description: 'Sample item added by the provisioning workflow. Edit or delete it from the admin panel.',
-      imageKey: key,
+      imageKey,
+      thumbKey,
       dateOfUpload: new Date().toISOString(),
     });
   }
   return products;
 }
 
-// Only write products.json when it is missing/empty so live catalogue data is never clobbered.
+// Writes products.json only when it is missing/empty so live catalogue data is never clobbered.
+// In an existing catalogue, seed products still on their original upload (seeded before
+// thumbnails existed) are pointed at the new variants; everything else is left as is.
 async function seedProductsJson(products) {
   const key = 'products/products.json';
+  let current = [];
   try {
     const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    const current = JSON.parse(await obj.Body.transformToString());
-    if (Array.isArray(current) && current.length > 0) {
-      return console.log(`${key} already has ${current.length} products; left untouched`);
-    }
+    current = JSON.parse(await obj.Body.transformToString());
   } catch (e) {
     if (e.name !== 'NoSuchKey' && e.$metadata?.httpStatusCode !== 404) throw e;
   }
-  await s3.send(new PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    Body: JSON.stringify(products, null, 2),
-    ContentType: 'application/json',
-  }));
+
+  if (Array.isArray(current) && current.length > 0) {
+    const seeded = new Map(products.map((p) => [p.id, p]));
+    let updated = 0;
+    for (const product of current) {
+      const seed = seeded.get(product.id);
+      if (seed && !product.thumbKey && product.imageKey?.startsWith('products/seed-')) {
+        product.imageKey = seed.imageKey;
+        product.thumbKey = seed.thumbKey;
+        updated++;
+      }
+    }
+    if (updated === 0) return console.log(`${key} already has ${current.length} products; left untouched`);
+    await put(key, JSON.stringify(current, null, 2), 'application/json');
+    return console.log(`${key}: added thumbnails to ${updated} seed products (backend cache refreshes on its next cold start)`);
+  }
+
+  await put(key, JSON.stringify(products, null, 2), 'application/json');
   console.log(`${key} written with ${products.length} seed products`);
 }
 
