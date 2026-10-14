@@ -346,11 +346,24 @@ jobs:
             echo "Added $DOMAIN to ${{ matrix.project }}"
           fi
 
-          count=$(curl -sf -H "$auth" "$api/zones/$ZONE_ID/dns_records?name=$DOMAIN" | jq '.result | length')
-          if [ "$count" = "0" ]; then
-            curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
-              --data "{\"type\":\"CNAME\",\"name\":\"$DOMAIN\",\"content\":\"${{ matrix.project }}.pages.dev\",\"proxied\":true}" \
-              "$api/zones/$ZONE_ID/dns_records" > /dev/null
-            echo "Created CNAME $DOMAIN -> ${{ matrix.project }}.pages.dev"
+          # Fails loudly: without this record the Pages domain stays "pending" forever
+          target="${{ matrix.project }}.pages.dev"
+          records=$(curl -s -H "$auth" "$api/zones/$ZONE_ID/dns_records?name=$DOMAIN")
+          if [ "$(jq -r '.success' <<<"$records")" != "true" ]; then
+            echo "::error::Listing DNS records failed (token needs Zone > DNS: Edit): $(jq -c '.errors' <<<"$records")"; exit 1
+          fi
+          existing=$(jq -r '.result[] | "\(.type) \(.content)"' <<<"$records")
+          if [ -z "$existing" ]; then
+            created=$(curl -s -X POST -H "$auth" -H 'Content-Type: application/json' \
+              --data "{\"type\":\"CNAME\",\"name\":\"$DOMAIN\",\"content\":\"$target\",\"proxied\":true}" \
+              "$api/zones/$ZONE_ID/dns_records")
+            if [ "$(jq -r '.success' <<<"$created")" != "true" ]; then
+              echo "::error::Creating CNAME $DOMAIN failed: $(jq -c '.errors' <<<"$created")"; exit 1
+            fi
+            echo "Created CNAME $DOMAIN -> $target"
+          elif [ "$existing" != "CNAME $target" ]; then
+            # Not overwritten automatically: it may be something you set up on purpose
+            echo "::error::$DOMAIN already has other DNS records; delete them so a CNAME to $target can be created:"
+            echo "$existing"; exit 1
           fi
           echo "${{ matrix.repo }} -> https://$DOMAIN" >> "$GITHUB_STEP_SUMMARY"
