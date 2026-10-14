@@ -44,7 +44,10 @@ jobs:
       - name: Resolve API URL
         run: |
           if [ -n "$API_URL" ]; then echo "API_URL=$API_URL" >> "$GITHUB_ENV"
-          else node scripts/env-config.mjs | sed -n 's/^api_url=/API_URL=/p' >> "$GITHUB_ENV"; fi
+          else
+            node scripts/env-config.mjs > "$RUNNER_TEMP/config"
+            sed -n 's/^api_url=/API_URL=/p' "$RUNNER_TEMP/config" >> "$GITHUB_ENV"
+          fi
         env:
           API_URL: ${{ inputs.api_url }}
           ENV_NAME: ${{ inputs.environment || 'dev' }}

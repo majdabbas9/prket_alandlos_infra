@@ -108,7 +108,11 @@ if (process.env.SKIP_LOOKUPS !== 'true') {
     for (let name = site; name.includes('.') && !zone; name = name.slice(name.indexOf('.') + 1)) {
       [zone] = await cf(`/zones?name=${name}&account.id=${out.account_id}`);
     }
-    if (!zone) die(`No Cloudflare zone in account ${out.account_id} contains ${site}`);
+    if (!zone)
+      die(
+        `No Cloudflare zone in account ${out.account_id} contains ${site} - or ${out.prefix}_CLOUDFLARE_API_TOKEN ` +
+          `can't see it (token needs Zone > Zone: Read, DNS: Edit, Workers Routes: Edit on that zone)`,
+      );
 
     const prefix = site === zone.name ? '' : `${site.slice(0, -zone.name.length - 1).replaceAll('.', '-')}-`;
     Object.assign(out, {

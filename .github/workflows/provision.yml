@@ -82,7 +82,9 @@ jobs:
 
       - name: Resolve ${{ inputs.environment || 'dev' }} settings
         id: config
-        run: node scripts/env-config.mjs | tee -a "$GITHUB_OUTPUT"
+        run: |
+          node scripts/env-config.mjs > "$RUNNER_TEMP/config"
+          tee -a "$GITHUB_OUTPUT" < "$RUNNER_TEMP/config"
         env:
           ENV_NAME: ${{ inputs.environment || 'dev' }}
           VARS_JSON: ${{ toJSON(vars) }}
