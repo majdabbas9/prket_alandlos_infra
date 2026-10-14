@@ -1,6 +1,7 @@
 name: Provision
 
-# One workflow for all Cloudflare provisioning:
+# One workflow for all Cloudflare provisioning of the DEV environment:
+#   domains    - derive every dev hostname from the DEV_URL variable (see below)
 #   storage    - terraform: create/adopt the R2 bucket (the D1 database already
 #                exists and is only referenced by CLOUDFLARE_DATABASE_ID)
 #   seed       - upload sample images to R2 and create the D1 admin user
@@ -17,6 +18,7 @@ on:
       - 'storage/**'
       - 'seed/**'
       - 'containers/**'
+      - 'scripts/**'
       - '.github/workflows/provision.yml'
   pull_request:
     paths:
@@ -42,12 +44,33 @@ env:
   R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
   CLOUDFLARE_DATABASE_ID: ${{ vars.CLOUDFLARE_DATABASE_ID }}
   STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'prket-terraform-state' }}
-  # Optional public CDN hostname for the bucket (e.g. images.example.com) and its zone ID.
-  # Unset = bucket stays private and images are served by the API Worker instead.
-  R2_PUBLIC_DOMAIN: ${{ vars.R2_PUBLIC_DOMAIN }}
 
 jobs:
+  # This stack is DEV: every custom hostname is derived from vars.DEV_URL, and
+  # vars.PROD_URL (the separate production stack) is never touched - see
+  # scripts/dev-domains.sh for the naming. DEV_URL unset = workers.dev / pages.dev only.
+  domains:
+    runs-on: ubuntu-latest
+    outputs:
+      zone_id: ${{ steps.derive.outputs.zone_id }}
+      site: ${{ steps.derive.outputs.site }}
+      admin: ${{ steps.derive.outputs.admin }}
+      api: ${{ steps.derive.outputs.api }}
+      images: ${{ steps.derive.outputs.images }}
+      api_url: ${{ steps.derive.outputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive dev hostnames
+        id: derive
+        run: bash scripts/dev-domains.sh | tee -a "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEV_URL: ${{ vars.DEV_URL }}
+          PROD_URL: ${{ vars.PROD_URL }}
+
   storage:
+    needs: domains
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -61,8 +84,8 @@ jobs:
       TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       TF_VAR_r2_bucket_name: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
       TF_VAR_cloudflare_database_id: ${{ vars.CLOUDFLARE_DATABASE_ID }}
-      TF_VAR_r2_public_domain: ${{ vars.R2_PUBLIC_DOMAIN }}
-      TF_VAR_r2_public_zone_id: ${{ vars.R2_PUBLIC_ZONE_ID }}
+      TF_VAR_r2_public_domain: ${{ needs.domains.outputs.images }}
+      TF_VAR_r2_public_zone_id: ${{ needs.domains.outputs.zone_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -163,7 +186,7 @@ jobs:
   # as Cloudflare Containers behind one Worker. Backend repos don't trigger this:
   # after pushing backend changes, re-run it via workflow_dispatch.
   deploy:
-    needs: [storage, seed]
+    needs: [domains, storage, seed]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment: production
@@ -172,6 +195,8 @@ jobs:
         working-directory: containers
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      API_DOMAIN: ${{ needs.domains.outputs.api }}
+      IMAGES_DOMAIN: ${{ needs.domains.outputs.images }}
     steps:
       - uses: actions/checkout@v4
 
@@ -194,14 +219,15 @@ jobs:
 
       - run: npx tsc --noEmit
 
-      # With a public bucket domain, the backend hands out CDN image URLs (R2_PUBLIC_URL)
+      # --domain makes wrangler create the DNS record + certificate for the API hostname
+      # (token needs Zone > DNS: Edit and Zone > Workers Routes: Edit). With a public bucket
+      # domain, the backend hands out CDN image URLs (R2_PUBLIC_URL).
       - name: Deploy Worker + containers
         run: |
-          if [ -n "$R2_PUBLIC_DOMAIN" ]; then
-            npx wrangler deploy --var "R2_PUBLIC_URL:https://$R2_PUBLIC_DOMAIN"
-          else
-            npx wrangler deploy
-          fi
+          args=()
+          [ -n "$API_DOMAIN" ] && args+=(--domain "$API_DOMAIN")
+          [ -n "$IMAGES_DOMAIN" ] && args+=(--var "R2_PUBLIC_URL:https://$IMAGES_DOMAIN")
+          npx wrangler deploy "${args[@]}"
 
       # Set after deploy so the first deploy can create the Worker; changing
       # secrets rolls a new version, so containers restart with the new values.
@@ -238,20 +264,24 @@ jobs:
 
   # Integration tests against the APIs just deployed. Skipped with deploy on PRs.
   it-backend:
-    needs: deploy
+    needs: [domains, deploy]
     uses: ./.github/workflows/it-backend.yml
+    with:
+      api_url: ${{ needs.domains.outputs.api_url }}
     secrets: inherit
 
   it-admin-backend:
-    needs: deploy
+    needs: [domains, deploy]
     uses: ./.github/workflows/it-admin-backend.yml
+    with:
+      api_url: ${{ needs.domains.outputs.api_url }}
     secrets: inherit
 
   # Static SPAs on Cloudflare Pages (free). VITE_* URLs are baked in at build
   # time, so they point at the API Worker. Like deploy, frontend repos don't
   # trigger this: re-run via workflow_dispatch after pushing frontend changes.
   frontends:
-    needs: deploy
+    needs: [domains, deploy]
     runs-on: ubuntu-latest
     environment: production
     strategy:
@@ -260,11 +290,16 @@ jobs:
         include:
           - repo: prket_alandlos_frontend
             project: prket-alandlos-site
+            host: site
           - repo: prket_alandlos_admin_frontend
             project: prket-alandlos-admin
+            host: admin
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      API_URL: ${{ vars.API_URL || 'https://prket-alandlos-api.majd-abbas222.workers.dev' }}
+      API_URL: ${{ needs.domains.outputs.api_url }}
+      # Custom hostname for this project (from DEV_URL); empty = pages.dev only
+      DOMAIN: ${{ needs.domains.outputs[matrix.host] }}
+      ZONE_ID: ${{ needs.domains.outputs.zone_id }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -294,3 +329,28 @@ jobs:
         run: |
           npx wrangler@4.149.0 pages deploy dist --project-name "${{ matrix.project }}" --branch main --commit-dirty=true
           echo "${{ matrix.repo }} -> https://${{ matrix.project }}.pages.dev" >> "$GITHUB_STEP_SUMMARY"
+
+      # Attaches the custom domain to the Pages project and points a proxied CNAME at
+      # <project>.pages.dev (the API doesn't create the record the way the dashboard does).
+      # Token needs Zone > DNS: Edit. Both calls are skipped when already in place.
+      - name: Attach custom domain
+        if: env.DOMAIN != ''
+        run: |
+          api="https://api.cloudflare.com/client/v4"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          project_api="$api/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/${{ matrix.project }}/domains"
+
+          if [ "$(curl -s -o /dev/null -w '%{http_code}' -H "$auth" "$project_api/$DOMAIN")" != "200" ]; then
+            curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
+              --data "{\"name\":\"$DOMAIN\"}" "$project_api" > /dev/null
+            echo "Added $DOMAIN to ${{ matrix.project }}"
+          fi
+
+          count=$(curl -sf -H "$auth" "$api/zones/$ZONE_ID/dns_records?name=$DOMAIN" | jq '.result | length')
+          if [ "$count" = "0" ]; then
+            curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
+              --data "{\"type\":\"CNAME\",\"name\":\"$DOMAIN\",\"content\":\"${{ matrix.project }}.pages.dev\",\"proxied\":true}" \
+              "$api/zones/$ZONE_ID/dns_records" > /dev/null
+            echo "Created CNAME $DOMAIN -> ${{ matrix.project }}.pages.dev"
+          fi
+          echo "${{ matrix.repo }} -> https://$DOMAIN" >> "$GITHUB_STEP_SUMMARY"

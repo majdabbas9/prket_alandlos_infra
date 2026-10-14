@@ -12,6 +12,9 @@
   "name": "prket-alandlos-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
+  // The custom API domain is derived from the DEV_URL GitHub variable and passed by CI
+  // (`wrangler deploy --domain`); workers.dev stays on so the default URL keeps working.
+  "workers_dev": true,
   "observability": {
     "enabled": true,
     "traces": { "enabled": true }

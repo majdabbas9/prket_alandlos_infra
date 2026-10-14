@@ -4,6 +4,11 @@ name: IT - Backend
 # Called by Provision right after its deploy job, or run manually. Tests: it/backend.test.mjs
 on:
   workflow_call:
+    inputs:
+      api_url:
+        description: 'API base URL (Provision passes the one it just deployed)'
+        type: string
+        required: false
   workflow_dispatch:
 
 concurrency:
@@ -25,10 +30,21 @@ jobs:
         with:
           node-version: 22
 
+      # Manual runs: same dev API URL Provision derives from DEV_URL
+      - name: Resolve API URL
+        run: |
+          if [ -n "$API_URL" ]; then echo "API_URL=$API_URL" >> "$GITHUB_ENV"
+          else bash scripts/dev-domains.sh | sed -n 's/^api_url=/API_URL=/p' >> "$GITHUB_ENV"; fi
+        env:
+          API_URL: ${{ inputs.api_url }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          DEV_URL: ${{ vars.DEV_URL }}
+          PROD_URL: ${{ vars.PROD_URL }}
+
       - name: Run integration tests
         working-directory: it
         run: node --test --test-reporter=spec --test-reporter-destination=stdout backend.test.mjs
         env:
-          API_URL: ${{ vars.API_URL || 'https://prket-alandlos-api.majd-abbas222.workers.dev' }}
           ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}

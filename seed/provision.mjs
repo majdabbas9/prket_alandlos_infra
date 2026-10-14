@@ -71,7 +71,10 @@ const resizeImage = (input) => {
   return Promise.all([variant(LARGE_WIDTH, 82), variant(THUMB_WIDTH, 75)]);
 };
 
-const put = (Key, Body, ContentType) => s3.send(new PutObjectCommand({ Bucket: bucket, Key, Body, ContentType }));
+// Same as the backend: a key's bytes never change (re-runs re-encode the same file), so caches may keep it
+const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const put = (Key, Body, ContentType, CacheControl) =>
+  s3.send(new PutObjectCommand({ Bucket: bucket, Key, Body, ContentType, CacheControl }));
 
 async function seedImages() {
   const files = (await readdir(imagesDir)).filter((f) => MIME[path.extname(f).toLowerCase()]).sort();
@@ -84,13 +87,16 @@ async function seedImages() {
     let thumbKey = `products/seed-${name}-thumb.webp`;
     try {
       const [large, thumb] = await resizeImage(original);
-      await Promise.all([put(imageKey, large, 'image/webp'), put(thumbKey, thumb, 'image/webp')]);
+      await Promise.all([
+        put(imageKey, large, 'image/webp', IMMUTABLE_CACHE_CONTROL),
+        put(thumbKey, thumb, 'image/webp', IMMUTABLE_CACHE_CONTROL),
+      ]);
       console.log(`  uploaded ${imageKey} (${large.length} B) + ${thumbKey} (${thumb.length} B)`);
     } catch (e) {
       // Like the backend: an image sharp can't decode is stored as-is and used for both
       console.warn(`  could not resize ${file} (${e.message}); uploading original`);
       imageKey = thumbKey = `products/seed-${file}`;
-      await put(imageKey, original, MIME[path.extname(file).toLowerCase()]);
+      await put(imageKey, original, MIME[path.extname(file).toLowerCase()], IMMUTABLE_CACHE_CONTROL);
       console.log(`  uploaded ${imageKey}`);
     }
     products.push({
