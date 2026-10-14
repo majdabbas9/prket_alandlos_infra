@@ -1,16 +1,27 @@
 name: Provision
 
-# One workflow for all Cloudflare provisioning of the DEV environment:
-#   domains    - derive every dev hostname from the DEV_URL variable (see below)
-#   storage    - terraform: create/adopt the R2 bucket (the D1 database already
-#                exists and is only referenced by CLOUDFLARE_DATABASE_ID)
-#   seed       - upload sample images to R2 and create the D1 admin user
+# One workflow for all Cloudflare provisioning, for two environments:
+#   dev  - every push to master (i.e. every merge)
+#   prod - only when run by hand: Actions -> Provision -> Run workflow -> environment: prod
+#
+# Jobs:
+#   config     - resolve the environment's settings (scripts/env-config.mjs): names,
+#                hostnames from <ENV>_URL, account / database IDs
+#   storage    - terraform: create/adopt the R2 bucket (+ its public CDN domain); the D1
+#                database already exists and is only referenced
+#   seed       - D1 users table + admin user; dev also gets the sample products in R2
 #   deploy     - deploy both APIs to Cloudflare Containers (containers/)
 #   it-*       - integration tests against the deployed APIs (it-backend.yml,
 #                it-admin-backend.yml; also runnable on their own)
 #   frontends  - build both frontends and publish them to Cloudflare Pages
 # (cloudflare/ - Pages + DNS terraform - is not wired into CI for now.)
-# PRs run plan only; pushes to master and manual runs apply.
+# PRs run the dev terraform plan only.
+#
+# Variables and secrets are read as <ENV>_<NAME> first, then <NAME>:
+#   vars:    DEV_/PROD_ CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, URL,
+#            optional R2_BUCKET_NAME, TF_STATE_BUCKET
+#   secrets: DEV_/PROD_ CLOUDFLARE_API_TOKEN, ACCESS_KEY_ID, SECRET_ACCESS_KEY,
+#            ADMIN_USERNAME, ADMIN_PASSWORD, optional D1_API_TOKEN, JWT_SECRET
 on:
   push:
     branches: [master]
@@ -26,51 +37,59 @@ on:
       - '.github/workflows/provision.yml'
   workflow_dispatch:
     inputs:
+      environment:
+        description: 'Environment to provision'
+        type: choice
+        options: ['dev', 'prod']
+        default: 'dev'
       reset_admin_password:
         description: 'Overwrite the admin password if the user already exists'
         type: boolean
         default: false
 
-# R2-backed state has no lock; serialize all runs.
+# R2-backed state has no lock; serialize runs per environment.
 concurrency:
-  group: provision
+  group: provision-${{ inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
-env:
-  CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-  R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
-  CLOUDFLARE_DATABASE_ID: ${{ vars.CLOUDFLARE_DATABASE_ID }}
-  STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'prket-terraform-state' }}
-
 jobs:
-  # This stack is DEV: every custom hostname is derived from vars.DEV_URL, and
-  # vars.PROD_URL (the separate production stack) is never touched - see
-  # scripts/dev-domains.sh for the naming. DEV_URL unset = workers.dev / pages.dev only.
-  domains:
+  config:
     runs-on: ubuntu-latest
     outputs:
-      zone_id: ${{ steps.derive.outputs.zone_id }}
-      site: ${{ steps.derive.outputs.site }}
-      admin: ${{ steps.derive.outputs.admin }}
-      api: ${{ steps.derive.outputs.api }}
-      images: ${{ steps.derive.outputs.images }}
-      api_url: ${{ steps.derive.outputs.api_url }}
+      env: ${{ steps.config.outputs.env }}
+      prefix: ${{ steps.config.outputs.prefix }}
+      gh_environment: ${{ steps.config.outputs.gh_environment }}
+      account_id: ${{ steps.config.outputs.account_id }}
+      database_id: ${{ steps.config.outputs.database_id }}
+      r2_bucket: ${{ steps.config.outputs.r2_bucket }}
+      state_bucket: ${{ steps.config.outputs.state_bucket }}
+      state_key: ${{ steps.config.outputs.state_key }}
+      worker: ${{ steps.config.outputs.worker }}
+      site_project: ${{ steps.config.outputs.site_project }}
+      admin_project: ${{ steps.config.outputs.admin_project }}
+      seed_samples: ${{ steps.config.outputs.seed_samples }}
+      zone_id: ${{ steps.config.outputs.zone_id }}
+      site: ${{ steps.config.outputs.site }}
+      admin: ${{ steps.config.outputs.admin }}
+      api: ${{ steps.config.outputs.api }}
+      images: ${{ steps.config.outputs.images }}
+      api_url: ${{ steps.config.outputs.api_url }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Derive dev hostnames
-        id: derive
-        run: bash scripts/dev-domains.sh | tee -a "$GITHUB_OUTPUT"
+      - name: Resolve ${{ inputs.environment || 'dev' }} settings
+        id: config
+        run: node scripts/env-config.mjs | tee -a "$GITHUB_OUTPUT"
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          DEV_URL: ${{ vars.DEV_URL }}
-          PROD_URL: ${{ vars.PROD_URL }}
+          ENV_NAME: ${{ inputs.environment || 'dev' }}
+          VARS_JSON: ${{ toJSON(vars) }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}_CLOUDFLARE_API_TOKEN', inputs.environment == 'prod' && 'PROD' || 'DEV')] || secrets.CLOUDFLARE_API_TOKEN }}
 
   storage:
-    needs: domains
+    needs: config
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -78,14 +97,17 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
-      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      TF_VAR_r2_bucket_name: ${{ vars.R2_BUCKET_NAME || 'prket-andlos' }}
-      TF_VAR_cloudflare_database_id: ${{ vars.CLOUDFLARE_DATABASE_ID }}
-      TF_VAR_r2_public_domain: ${{ needs.domains.outputs.images }}
-      TF_VAR_r2_public_zone_id: ${{ needs.domains.outputs.zone_id }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ needs.config.outputs.account_id }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}_CLOUDFLARE_API_TOKEN', needs.config.outputs.prefix)] || secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets[format('{0}_ACCESS_KEY_ID', needs.config.outputs.prefix)] || secrets.ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets[format('{0}_SECRET_ACCESS_KEY', needs.config.outputs.prefix)] || secrets.SECRET_ACCESS_KEY }}
+      R2_BUCKET_NAME: ${{ needs.config.outputs.r2_bucket }}
+      STATE_BUCKET: ${{ needs.config.outputs.state_bucket }}
+      TF_VAR_cloudflare_account_id: ${{ needs.config.outputs.account_id }}
+      TF_VAR_r2_bucket_name: ${{ needs.config.outputs.r2_bucket }}
+      TF_VAR_cloudflare_database_id: ${{ needs.config.outputs.database_id }}
+      TF_VAR_r2_public_domain: ${{ needs.config.outputs.images }}
+      TF_VAR_r2_public_zone_id: ${{ needs.config.outputs.zone_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -94,19 +116,29 @@ jobs:
           terraform_version: "1.10.5"
           terraform_wrapper: false
 
-      # The state bucket is created once by hand (see README); fail early if absent.
-      - name: Check Terraform state bucket exists
+      # Terraform keeps its state in this bucket, so it can't create it: done here on the
+      # first run of an environment (PRs only check).
+      - name: Ensure Terraform state bucket
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$STATE_BUCKET")
-          if [ "$code" != "200" ]; then
-            echo "State bucket '$STATE_BUCKET' not found (HTTP $code). Create it in R2 first."; exit 1
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "$auth" "$api/$STATE_BUCKET")
+          if [ "$code" = "200" ]; then exit 0; fi
+          if [ "$code" != "404" ] || [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "::error::State bucket '$STATE_BUCKET' not available (HTTP $code)"; exit 1
           fi
+          created=$(curl -s -X POST -H "$auth" -H 'Content-Type: application/json' \
+            --data "{\"name\":\"$STATE_BUCKET\"}" "$api")
+          if [ "$(jq -r '.success' <<<"$created")" != "true" ]; then
+            echo "::error::Creating state bucket '$STATE_BUCKET' failed: $(jq -c '.errors' <<<"$created")"; exit 1
+          fi
+          echo "Created state bucket $STATE_BUCKET"
 
       - name: Terraform init
         run: |
           {
             echo "bucket    = \"$STATE_BUCKET\""
-            echo "key       = \"storage/terraform.tfstate\""
+            echo "key       = \"${{ needs.config.outputs.state_key }}\""
             echo "endpoints = { s3 = \"https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com\" }"
           } > backend.hcl
           terraform init -backend-config=backend.hcl
@@ -116,8 +148,7 @@ jobs:
           terraform fmt -check
           terraform validate
 
-      # The prod bucket already exists: adopt it into state
-      # instead of failing on "already exists".
+      # An existing bucket is adopted into state instead of failing on "already exists".
       - name: Import existing resources
         if: github.event_name != 'pull_request'
         run: |
@@ -138,12 +169,18 @@ jobs:
         run: terraform apply -input=false tfplan
 
   seed:
-    needs: storage
+    needs: [config, storage]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: seed
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ needs.config.outputs.account_id }}
+      R2_BUCKET_NAME: ${{ needs.config.outputs.r2_bucket }}
+      ACCESS_KEY_ID: ${{ secrets[format('{0}_ACCESS_KEY_ID', needs.config.outputs.prefix)] || secrets.ACCESS_KEY_ID }}
+      SECRET_ACCESS_KEY: ${{ secrets[format('{0}_SECRET_ACCESS_KEY', needs.config.outputs.prefix)] || secrets.SECRET_ACCESS_KEY }}
+      SEED_SAMPLE_PRODUCTS: ${{ needs.config.outputs.seed_samples }}
     steps:
       - uses: actions/checkout@v4
 
@@ -153,18 +190,17 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      - name: Seed R2 images and D1 admin user
+      - name: Seed R2 and D1 admin user
         run: node provision.mjs
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_DATABASE_ID: ${{ vars.CLOUDFLARE_DATABASE_ID }}
-          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
-          SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
-          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}_CLOUDFLARE_API_TOKEN', needs.config.outputs.prefix)] || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DATABASE_ID: ${{ needs.config.outputs.database_id }}
+          ADMIN_USERNAME: ${{ secrets[format('{0}_ADMIN_USERNAME', needs.config.outputs.prefix)] || secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ secrets[format('{0}_ADMIN_PASSWORD', needs.config.outputs.prefix)] || secrets.ADMIN_PASSWORD }}
           RESET_ADMIN_PASSWORD: ${{ inputs.reset_admin_password }}
 
       - name: Verify R2 contains images
+        if: env.SEED_SAMPLE_PRODUCTS == 'true'
         run: |
           node --input-type=module <<'JS'
           import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
@@ -178,25 +214,25 @@ jobs:
           console.log(`Images in R2 under products/: ${imgs.length}`);
           if (imgs.length === 0) { console.error('No images found in R2'); process.exit(1); }
           JS
-        env:
-          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
-          SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
 
   # Wraps the latest GHCR backend images (containers/*.Dockerfile) and deploys them
   # as Cloudflare Containers behind one Worker. Backend repos don't trigger this:
   # after pushing backend changes, re-run it via workflow_dispatch.
   deploy:
-    needs: [domains, storage, seed]
+    needs: [config, storage, seed]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ needs.config.outputs.gh_environment }}
     defaults:
       run:
         working-directory: containers
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      API_DOMAIN: ${{ needs.domains.outputs.api }}
-      IMAGES_DOMAIN: ${{ needs.domains.outputs.images }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ needs.config.outputs.account_id }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}_CLOUDFLARE_API_TOKEN', needs.config.outputs.prefix)] || secrets.CLOUDFLARE_API_TOKEN }}
+      WORKER_NAME: ${{ needs.config.outputs.worker }}
+      R2_BUCKET_NAME: ${{ needs.config.outputs.r2_bucket }}
+      API_DOMAIN: ${{ needs.config.outputs.api }}
+      IMAGES_DOMAIN: ${{ needs.config.outputs.images }}
     steps:
       - uses: actions/checkout@v4
 
@@ -219,12 +255,27 @@ jobs:
 
       - run: npx tsc --noEmit
 
+      # wrangler.jsonc with this environment's Worker name and bucket
+      - name: Write environment wrangler config
+        run: |
+          node -e '
+            const fs = require("fs");
+            const ts = require("typescript");
+            const { config, error } = ts.parseConfigFileTextToJson("wrangler.jsonc", fs.readFileSync("wrangler.jsonc", "utf8"));
+            if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
+            config.name = process.env.WORKER_NAME;
+            config.r2_buckets.find((b) => b.binding === "BUCKET").bucket_name = process.env.R2_BUCKET_NAME;
+            config.vars.R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
+            fs.writeFileSync("wrangler.ci.json", JSON.stringify(config, null, 2));
+          '
+          echo "Worker $WORKER_NAME, bucket $R2_BUCKET_NAME"
+
       # --domain makes wrangler create the DNS record + certificate for the API hostname
-      # (token needs Zone > DNS: Edit and Zone > Workers Routes: Edit). With a public bucket
-      # domain, the backend hands out CDN image URLs (R2_PUBLIC_URL).
+      # (token needs Zone > Workers Routes: Edit). With a public bucket domain, the backend
+      # hands out CDN image URLs (R2_PUBLIC_URL).
       - name: Deploy Worker + containers
         run: |
-          args=()
+          args=(--config wrangler.ci.json)
           [ -n "$API_DOMAIN" ] && args+=(--domain "$API_DOMAIN")
           [ -n "$IMAGES_DOMAIN" ] && args+=(--var "R2_PUBLIC_URL:https://$IMAGES_DOMAIN")
           npx wrangler deploy "${args[@]}"
@@ -237,7 +288,7 @@ jobs:
         run: |
           set -o pipefail
           if [ -z "$JWT_SECRET" ]; then
-            if npx wrangler secret list --format json | grep -q '"JWT_SECRET"'; then
+            if npx wrangler secret list --config wrangler.ci.json --format json | grep -q '"JWT_SECRET"'; then
               echo "JWT_SECRET: keeping the value already on the Worker"
               export SKIP_JWT=1
             else
@@ -253,53 +304,54 @@ jobs:
             const missing = keys.filter((k) => !process.env[k]);
             if (missing.length) { console.error("Missing: " + missing.join(", ")); process.exit(1); }
             console.log(JSON.stringify(Object.fromEntries(keys.map((k) => [k, process.env[k]]))));
-          ' | npx wrangler secret bulk
+          ' | npx wrangler secret bulk --config wrangler.ci.json
         env:
-          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
-          SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_DATABASE_ID: ${{ vars.CLOUDFLARE_DATABASE_ID }}
-          D1_API_TOKEN: ${{ secrets.D1_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ACCESS_KEY_ID: ${{ secrets[format('{0}_ACCESS_KEY_ID', needs.config.outputs.prefix)] || secrets.ACCESS_KEY_ID }}
+          SECRET_ACCESS_KEY: ${{ secrets[format('{0}_SECRET_ACCESS_KEY', needs.config.outputs.prefix)] || secrets.SECRET_ACCESS_KEY }}
+          CLOUDFLARE_DATABASE_ID: ${{ needs.config.outputs.database_id }}
+          D1_API_TOKEN: ${{ secrets[format('{0}_D1_API_TOKEN', needs.config.outputs.prefix)] || secrets.D1_API_TOKEN || secrets[format('{0}_CLOUDFLARE_API_TOKEN', needs.config.outputs.prefix)] || secrets.CLOUDFLARE_API_TOKEN }}
+          JWT_SECRET: ${{ secrets[format('{0}_JWT_SECRET', needs.config.outputs.prefix)] || secrets.JWT_SECRET }}
 
   # Integration tests against the APIs just deployed. Skipped with deploy on PRs.
   it-backend:
-    needs: [domains, deploy]
+    needs: [config, deploy]
     uses: ./.github/workflows/it-backend.yml
     with:
-      api_url: ${{ needs.domains.outputs.api_url }}
+      environment: ${{ needs.config.outputs.env }}
+      api_url: ${{ needs.config.outputs.api_url }}
     secrets: inherit
 
   it-admin-backend:
-    needs: [domains, deploy]
+    needs: [config, deploy]
     uses: ./.github/workflows/it-admin-backend.yml
     with:
-      api_url: ${{ needs.domains.outputs.api_url }}
+      environment: ${{ needs.config.outputs.env }}
+      api_url: ${{ needs.config.outputs.api_url }}
     secrets: inherit
 
   # Static SPAs on Cloudflare Pages (free). VITE_* URLs are baked in at build
-  # time, so they point at the API Worker. Like deploy, frontend repos don't
+  # time, so they point at this environment's API. Like deploy, frontend repos don't
   # trigger this: re-run via workflow_dispatch after pushing frontend changes.
   frontends:
-    needs: [domains, deploy]
+    needs: [config, deploy]
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ needs.config.outputs.gh_environment }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - repo: prket_alandlos_frontend
-            project: prket-alandlos-site
             host: site
           - repo: prket_alandlos_admin_frontend
-            project: prket-alandlos-admin
             host: admin
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      API_URL: ${{ needs.domains.outputs.api_url }}
-      # Custom hostname for this project (from DEV_URL); empty = pages.dev only
-      DOMAIN: ${{ needs.domains.outputs[matrix.host] }}
-      ZONE_ID: ${{ needs.domains.outputs.zone_id }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ needs.config.outputs.account_id }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}_CLOUDFLARE_API_TOKEN', needs.config.outputs.prefix)] || secrets.CLOUDFLARE_API_TOKEN }}
+      API_URL: ${{ needs.config.outputs.api_url }}
+      PROJECT: ${{ needs.config.outputs[format('{0}_project', matrix.host)] }}
+      # Custom hostname for this project (from <ENV>_URL); empty = pages.dev only
+      DOMAIN: ${{ needs.config.outputs[matrix.host] }}
+      ZONE_ID: ${{ needs.config.outputs.zone_id }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -317,9 +369,10 @@ jobs:
 
       - name: Create Pages project if missing
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/${{ matrix.project }}")
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PROJECT")
           if [ "$code" = "404" ]; then
-            npx wrangler@4.149.0 pages project create "${{ matrix.project }}" --production-branch main
+            npx wrangler@4.149.0 pages project create "$PROJECT" --production-branch main
           elif [ "$code" != "200" ]; then
             echo "Pages API returned HTTP $code (token needs Account > Cloudflare Pages: Edit)"; exit 1
           fi
@@ -327,43 +380,60 @@ jobs:
       - name: Deploy to Pages
         working-directory: app
         run: |
-          npx wrangler@4.149.0 pages deploy dist --project-name "${{ matrix.project }}" --branch main --commit-dirty=true
-          echo "${{ matrix.repo }} -> https://${{ matrix.project }}.pages.dev" >> "$GITHUB_STEP_SUMMARY"
+          npx wrangler@4.149.0 pages deploy dist --project-name "$PROJECT" --branch main --commit-dirty=true
+          echo "${{ matrix.repo }} -> https://$PROJECT.pages.dev" >> "$GITHUB_STEP_SUMMARY"
 
       # Attaches the custom domain to the Pages project and points a proxied CNAME at
       # <project>.pages.dev (the API doesn't create the record the way the dashboard does).
-      # Token needs Zone > DNS: Edit. Both calls are skipped when already in place.
+      # Token needs Zone > DNS: Edit. Domains this project no longer uses (after <ENV>_URL
+      # changed) are detached, and a CNAME still pointing at another of this stack's Pages
+      # projects is repointed, so a hostname can move between environments.
       - name: Attach custom domain
         if: env.DOMAIN != ''
         run: |
           api="https://api.cloudflare.com/client/v4"
           auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-          project_api="$api/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/${{ matrix.project }}/domains"
+          project_api="$api/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PROJECT/domains"
+          target="$PROJECT.pages.dev"
+
+          for old in $(curl -sf -H "$auth" "$project_api" | jq -r '.result[].name'); do
+            [ "$old" = "$DOMAIN" ] && continue
+            curl -sf -X DELETE -H "$auth" "$project_api/$old" > /dev/null
+            echo "Detached old domain $old from $PROJECT"
+          done
 
           if [ "$(curl -s -o /dev/null -w '%{http_code}' -H "$auth" "$project_api/$DOMAIN")" != "200" ]; then
-            curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
-              --data "{\"name\":\"$DOMAIN\"}" "$project_api" > /dev/null
-            echo "Added $DOMAIN to ${{ matrix.project }}"
+            added=$(curl -s -X POST -H "$auth" -H 'Content-Type: application/json' \
+              --data "{\"name\":\"$DOMAIN\"}" "$project_api")
+            if [ "$(jq -r '.success' <<<"$added")" != "true" ]; then
+              echo "::error::Adding $DOMAIN to $PROJECT failed (still attached to another project?): $(jq -c '.errors' <<<"$added")"; exit 1
+            fi
+            echo "Added $DOMAIN to $PROJECT"
           fi
 
           # Fails loudly: without this record the Pages domain stays "pending" forever
-          target="${{ matrix.project }}.pages.dev"
           records=$(curl -s -H "$auth" "$api/zones/$ZONE_ID/dns_records?name=$DOMAIN")
           if [ "$(jq -r '.success' <<<"$records")" != "true" ]; then
             echo "::error::Listing DNS records failed (token needs Zone > DNS: Edit): $(jq -c '.errors' <<<"$records")"; exit 1
           fi
           existing=$(jq -r '.result[] | "\(.type) \(.content)"' <<<"$records")
+          record='{"type":"CNAME","name":"'"$DOMAIN"'","content":"'"$target"'","proxied":true}'
           if [ -z "$existing" ]; then
-            created=$(curl -s -X POST -H "$auth" -H 'Content-Type: application/json' \
-              --data "{\"type\":\"CNAME\",\"name\":\"$DOMAIN\",\"content\":\"$target\",\"proxied\":true}" \
+            result=$(curl -s -X POST -H "$auth" -H 'Content-Type: application/json' --data "$record" \
               "$api/zones/$ZONE_ID/dns_records")
-            if [ "$(jq -r '.success' <<<"$created")" != "true" ]; then
-              echo "::error::Creating CNAME $DOMAIN failed: $(jq -c '.errors' <<<"$created")"; exit 1
-            fi
-            echo "Created CNAME $DOMAIN -> $target"
-          elif [ "$existing" != "CNAME $target" ]; then
-            # Not overwritten automatically: it may be something you set up on purpose
+          elif [ "$existing" = "CNAME $target" ]; then
+            result='{"success":true}'
+          elif grep -Eqx 'CNAME prket-alandlos-[a-z0-9-]+\.pages\.dev' <<<"$existing"; then
+            id=$(jq -r '.result[0].id' <<<"$records")
+            result=$(curl -s -X PUT -H "$auth" -H 'Content-Type: application/json' --data "$record" \
+              "$api/zones/$ZONE_ID/dns_records/$id")
+          else
+            # Not overwritten automatically: it may be something set up on purpose
             echo "::error::$DOMAIN already has other DNS records; delete them so a CNAME to $target can be created:"
             echo "$existing"; exit 1
           fi
+          if [ "$(jq -r '.success' <<<"$result")" != "true" ]; then
+            echo "::error::Writing CNAME $DOMAIN -> $target failed: $(jq -c '.errors' <<<"$result")"; exit 1
+          fi
+          echo "CNAME $DOMAIN -> $target"
           echo "${{ matrix.repo }} -> https://$DOMAIN" >> "$GITHUB_STEP_SUMMARY"

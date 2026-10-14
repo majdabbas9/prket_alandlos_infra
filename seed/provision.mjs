@@ -11,6 +11,7 @@
 // Optional env:
 //   R2_BUCKET_NAME (default prket-andlos)
 //   RESET_ADMIN_PASSWORD=true  overwrite the password if the user already exists
+//   SEED_SAMPLE_PRODUCTS=false skip the sample images/products (production starts empty)
 import { readdir, readFile } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,6 +33,7 @@ const dbId = env('CLOUDFLARE_DATABASE_ID');
 const adminUser = env('ADMIN_USERNAME');
 const adminPass = env('ADMIN_PASSWORD');
 const resetPassword = process.env.RESET_ADMIN_PASSWORD === 'true';
+const seedSamples = process.env.SEED_SAMPLE_PRODUCTS !== 'false';
 
 const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}`;
 const imagesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'images');
@@ -177,7 +179,8 @@ async function seedDatabase() {
 
 // ---------- main ----------
 console.log('== R2 ==');
-await seedProductsJson(await seedImages());
+if (seedSamples) await seedProductsJson(await seedImages());
+else console.log('Sample products skipped (SEED_SAMPLE_PRODUCTS=false)');
 console.log('== D1 ==');
 await seedDatabase();
 

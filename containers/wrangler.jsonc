@@ -6,13 +6,15 @@
 //   backend        idle ~90 MiB, peak ~135 MiB under load, ~1 core burst; sharp
 //                  resizes 10 MB uploads + embedded Redis (capped 128 MB)  -> basic
 //   admin-backend  idle/peak ~53 MiB, near-zero CPU (JWT verify, bcrypt on login) -> lite
-// Deployed by .github/workflows/provision.yml (deploy job).
+// Deployed by .github/workflows/provision.yml (deploy job), once per environment: CI writes a
+// copy with that environment's Worker name and bucket (scripts/env-config.mjs) - the values
+// below are dev's.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "prket-alandlos-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  // The custom API domain is derived from the DEV_URL GitHub variable and passed by CI
+  // The custom API domain is derived from the DEV_URL / PROD_URL GitHub variable and passed by CI
   // (`wrangler deploy --domain`); workers.dev stays on so the default URL keeps working.
   "workers_dev": true,
   "observability": {
@@ -49,8 +51,8 @@
   ],
   "vars": {
     "R2_BUCKET_NAME": "prket-andlos"
-    // R2_PUBLIC_URL is added by CI (`wrangler deploy --var`) when the R2_PUBLIC_DOMAIN
-    // GitHub variable is set - see .github/workflows/provision.yml
+    // R2_PUBLIC_URL is added by CI (`wrangler deploy --var`) when the environment has a
+    // DEV_URL / PROD_URL (images.<domain>) - see .github/workflows/provision.yml
   }
   // Secrets (set by CI via `wrangler secret bulk`):
   //   ACCESS_KEY_ID, SECRET_ACCESS_KEY, CLOUDFLARE_ACCOUNT_ID,
