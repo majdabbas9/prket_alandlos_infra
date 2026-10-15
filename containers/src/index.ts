@@ -20,12 +20,46 @@ interface Env {
   API_DISABLED?: string;
 }
 
+const ENV_FINGERPRINT_KEY = 'envFingerprint';
+
+async function fingerprint(vars: Record<string, string> | undefined): Promise<string> {
+  const json = JSON.stringify(Object.entries(vars ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * A running container keeps the env vars it was started with, so new Worker secrets (rotated
+ * R2 keys, D1 token) would never reach it while it stays warm. Each container records a hash
+ * of its env on start; the first request after a deploy restarts it if that env has changed.
+ */
+abstract class ConfiguredContainer extends Container<Env> {
+  private envChecked?: Promise<void>;
+
+  override async onStart(): Promise<void> {
+    await this.ctx.storage.put(ENV_FINGERPRINT_KEY, await fingerprint(this.envVars));
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    // Env only changes with a new Worker version, which gets a fresh Durable Object instance
+    this.envChecked ??= (async () => {
+      if (!this.ctx.container?.running) return;
+      const started = await this.ctx.storage.get<string>(ENV_FINGERPRINT_KEY);
+      if (started === (await fingerprint(this.envVars))) return;
+      console.log('Container env changed since it started, restarting it');
+      await this.destroy();
+    })();
+    await this.envChecked;
+    return super.fetch(request);
+  }
+}
+
 // The backend validates tokens by calling ADMIN_BACKEND_URL/auth/validate.
 // Containers have no private network, so that call goes to this fake host and
 // is intercepted below and handed straight to the AdminBackend container.
 const AUTH_HOST = 'auth.internal';
 
-export class Backend extends Container<Env> {
+export class Backend extends ConfiguredContainer {
   defaultPort = 8080;
   // Stay warm for a while after the last request; cold start re-fills the cache from R2.
   sleepAfter = '15m';
@@ -58,7 +92,7 @@ export class Backend extends Container<Env> {
   }
 }
 
-export class AdminBackend extends Container<Env> {
+export class AdminBackend extends ConfiguredContainer {
   defaultPort = 5001;
   sleepAfter = '15m';
   enableInternet = true; // D1 REST API

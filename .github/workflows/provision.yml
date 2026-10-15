@@ -69,11 +69,9 @@ jobs:
       state_key: ${{ steps.config.outputs.state_key }}
       worker: ${{ steps.config.outputs.worker }}
       site_project: ${{ steps.config.outputs.site_project }}
-      admin_project: ${{ steps.config.outputs.admin_project }}
       seed_samples: ${{ steps.config.outputs.seed_samples }}
       zone_id: ${{ steps.config.outputs.zone_id }}
       site: ${{ steps.config.outputs.site }}
-      admin: ${{ steps.config.outputs.admin }}
       api: ${{ steps.config.outputs.api }}
       images: ${{ steps.config.outputs.images }}
       api_url: ${{ steps.config.outputs.api_url }}
@@ -350,14 +348,30 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ needs.config.outputs.account_id }}
       CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}_CLOUDFLARE_API_TOKEN', needs.config.outputs.prefix)] || secrets.CLOUDFLARE_API_TOKEN }}
       API_URL: ${{ needs.config.outputs.api_url }}
-      PROJECT: ${{ needs.config.outputs[format('{0}_project', matrix.host)] }}
-      # Custom hostname for this project (from <ENV>_URL); empty = pages.dev only
-      DOMAIN: ${{ needs.config.outputs[matrix.host] }}
       ZONE_ID: ${{ needs.config.outputs.zone_id }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: infra
+          sparse-checkout: scripts
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22  # wrangler 4 requires Node >= 22
+
+      # PROJECT and DOMAIN (custom hostname from <ENV>_URL; empty = pages.dev only) are resolved
+      # here, not taken from the config job: GitHub masks every secret value in logs and drops
+      # job outputs containing one, and ADMIN_USERNAME "admin" is part of the admin names.
+      - name: Resolve Pages project and domain
+        run: |
+          node infra/scripts/env-config.mjs > "$RUNNER_TEMP/config"
+          {
+            echo "PROJECT=$(sed -n "s/^${{ matrix.host }}_project=//p" "$RUNNER_TEMP/config")"
+            echo "DOMAIN=$(sed -n "s/^${{ matrix.host }}=//p" "$RUNNER_TEMP/config")"
+          } >> "$GITHUB_ENV"
+        env:
+          ENV_NAME: ${{ needs.config.outputs.env }}
+          VARS_JSON: ${{ toJSON(vars) }}
 
       - name: Build
         run: |
