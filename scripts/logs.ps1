@@ -3,7 +3,7 @@
 #
 #   .\scripts\logs.ps1          # last 30 min, both containers
 #   .\logs.ps1 -Minutes 120     # further back
-#   .\logs.ps1 -Search redis    # only lines containing "redis"
+#   .\logs.ps1 -Search redis    # only lines containing "error"
 #   .\logs.ps1 -All             # include the Worker's own events too
 #
 # Needs an API token with Account > Workers Observability > Read in CLAUDE_CODE_CLOUDFLARE_TOKEN_DEV.
