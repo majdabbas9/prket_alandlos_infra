@@ -368,6 +368,8 @@ jobs:
         env:
           VITE_SERVER_URL: ${{ env.API_URL }}
           VITE_ADMIN_BACKEND_URL: ${{ env.API_URL }}
+          # Hero image + logo straight from the public R2 domain; empty = through the API
+          VITE_IMAGES_URL: ${{ needs.config.outputs.images && format('https://{0}', needs.config.outputs.images) || '' }}
 
       - name: Create Pages project if missing
         run: |
