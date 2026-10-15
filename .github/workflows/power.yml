@@ -1,13 +1,13 @@
 name: Power
 # Switch the site off/on without deleting anything.
 #   off - both Pages projects serve maintenance/ (a "back soon" page), then the
-#         Worker answers 503 and never wakes a container; running containers
+#         Workers (backend + auth) answer 503 and never wake a container; running containers
 #         get no traffic and stop gracefully (SIGTERM) within sleepAfter (15 min).
 #         Worker, images, Durable Objects, secrets and old Pages deployments all stay.
 #   on  - traffic flows again (containers cold-start on the next request), then
 #         each Pages project rolls back to its last real deployment - no rebuild.
-# The API flag is the API_DISABLED Worker secret, so it survives Provision deploys.
-# Note: a Provision run while off publishes the real frontends again.
+# The API flag is the API_DISABLED Worker secret, so it survives the app repos' deploys.
+# Note: a frontend repo deploy while off publishes the real site again.
 on:
   workflow_dispatch:
     inputs:
@@ -22,7 +22,6 @@ on:
         options: ['dev', 'prod']
         default: 'dev'
 
-# Don't race a Provision deploy.
 concurrency:
   group: provision-${{ inputs.environment }}
   cancel-in-progress: false
@@ -37,22 +36,18 @@ jobs:
   power:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment == 'prod' && 'production' || 'dev' }}
-    defaults:
-      run:
-        working-directory: containers
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}_CLOUDFLARE_API_TOKEN', inputs.environment == 'prod' && 'PROD' || 'DEV')] || secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
-      # Same Worker / Pages names and account as Provision uses for this environment
+      # Same Worker / Pages names and account as the app repos use for this environment
       - name: Resolve ${{ inputs.environment }} settings
-        working-directory: .
         run: |
           node scripts/env-config.mjs > "$RUNNER_TEMP/config"
           {
             echo "CLOUDFLARE_ACCOUNT_ID=$(sed -n 's/^account_id=//p' "$RUNNER_TEMP/config")"
-            echo "WORKER_NAME=$(sed -n 's/^worker=//p' "$RUNNER_TEMP/config")"
+            echo "WORKERS=$(sed -n 's/^\(backend\|auth\)_worker=//p' "$RUNNER_TEMP/config" | xargs)"
             echo "PAGES_PROJECTS=$(sed -n 's/^\(site\|admin\)_project=//p' "$RUNNER_TEMP/config" | xargs)"
           } | tee -a "$GITHUB_ENV"
         env:
@@ -64,14 +59,12 @@ jobs:
         with:
           node-version: 22  # wrangler 4 requires Node >= 22
 
-      - run: npm ci --no-audit --no-fund
-
       # off: swap the frontends first, so nobody sees a half-broken site.
       - name: Publish maintenance page
         if: inputs.state == 'off'
         run: |
           for project in $PAGES_PROJECTS; do
-            npx wrangler pages deploy ../maintenance --project-name "$project" --branch main \
+            npx wrangler@4.149.0 pages deploy maintenance --project-name "$project" --branch main \
               --commit-message "$MAINTENANCE_MSG" --commit-dirty=true
           done
           echo "Frontends: maintenance page" >> "$GITHUB_STEP_SUMMARY"
@@ -79,7 +72,9 @@ jobs:
       - name: Set API_DISABLED
         run: |
           value=$([ "${{ inputs.state }}" = "off" ] && echo true || echo false)
-          echo "$value" | npx wrangler secret put API_DISABLED --name "$WORKER_NAME"
+          for worker in $WORKERS; do
+            echo "$value" | npx wrangler@4.149.0 secret put API_DISABLED --name "$worker"
+          done
           echo "API: switched ${{ inputs.state }} (API_DISABLED=$value)" >> "$GITHUB_STEP_SUMMARY"
 
       # on: point production back at the newest real build (anything not
@@ -99,7 +94,7 @@ jobs:
               | map(select(.deployment_trigger.metadata.commit_message != $m and .latest_stage.status == "success"))
               | sort_by(.created_on) | last | .id // empty' <<<"$deployments")
             if [ -z "$target" ]; then
-              echo "::error::$project: no earlier real deployment found - run Provision to rebuild it"; exit 1
+              echo "::error::$project: no earlier real deployment found - re-run that frontend repo's CD"; exit 1
             fi
             curl -sf -X POST -H "$auth" "$api/$project/deployments/$target/rollback" >/dev/null
             echo "$project: rolled back to $target"

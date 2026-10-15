@@ -1,6 +1,7 @@
 // Resolves every setting of one environment (dev / prod) of the stack and prints them as
-// key=value lines, ready for $GITHUB_OUTPUT. Used by provision.yml, power.yml and the it-*.yml
-// workflows, so they all agree on names and URLs.
+// key=value lines, ready for $GITHUB_OUTPUT. Used by provision.yml and power.yml here, and by
+// every app repo's CI/CD (they check out this script from this public repo), so they all agree
+// on names and URLs.
 //
 // GitHub variables are looked up as <ENV>_<NAME> first (DEV_CLOUDFLARE_ACCOUNT_ID,
 // PROD_URL, ...), then as the plain <NAME>. Secrets follow the same rule in the workflows.
@@ -15,17 +16,19 @@
 //            URL = zone (majdabbas.dev)    URL = sub.zone (dev.majdabbas.dev)
 //   site     majdabbas.dev                 dev.majdabbas.dev
 //   admin    admin.majdabbas.dev           dev-admin.majdabbas.dev
-//   api      api.majdabbas.dev             dev-api.majdabbas.dev
+//   api      api.majdabbas.dev             dev-api.majdabbas.dev     (backend Worker)
+//   auth     auth.majdabbas.dev            dev-auth.majdabbas.dev    (admin backend Worker)
 //   images   images.majdabbas.dev          dev-images.majdabbas.dev  (public R2 CDN)
 //
-// <ENV>_URL unset = no custom domains: the API is reached on workers.dev, the sites on pages.dev.
+// <ENV>_URL unset = no custom domains: the APIs are reached on workers.dev, the sites on pages.dev.
 //
 // Env: ENV_NAME (dev|prod), VARS_JSON (${{ toJSON(vars) }}), CLOUDFLARE_API_TOKEN
 //      (Zone: Read, Workers Scripts: Read). SKIP_LOOKUPS=true prints only the names (no API calls).
 
 const DEFAULTS = {
   dev: {
-    worker: 'prket-alandlos-api',
+    backend_worker: 'prket-alandlos-backend',
+    auth_worker: 'prket-alandlos-auth',
     site_project: 'prket-alandlos-site',
     admin_project: 'prket-alandlos-admin',
     r2_bucket: 'prket-andlos',
@@ -34,7 +37,8 @@ const DEFAULTS = {
     seed_samples: 'true',
   },
   prod: {
-    worker: 'prket-alandlos-api-prod',
+    backend_worker: 'prket-alandlos-backend-prod',
+    auth_worker: 'prket-alandlos-auth-prod',
     site_project: 'prket-alandlos-site-prod',
     admin_project: 'prket-alandlos-admin-prod',
     r2_bucket: 'prket-andlos-prod',
@@ -74,16 +78,16 @@ const out = {
   r2_bucket: vars[`${envName.toUpperCase()}_R2_BUCKET_NAME`] || (envName === 'dev' && vars.R2_BUCKET_NAME) || d.r2_bucket,
   state_bucket: get('TF_STATE_BUCKET') || STATE_BUCKET,
   state_key: d.state_key,
-  worker: d.worker,
+  backend_worker: d.backend_worker,
+  auth_worker: d.auth_worker,
+  // KV namespace of the backend's cache: created by storage/ (Terraform), bound by the backend repo
+  kv_cache_title: `${d.backend_worker}-cache`,
   site_project: d.site_project,
   admin_project: d.admin_project,
   seed_samples: d.seed_samples,
-  // Containers (deploy job). *_IMAGE_TAG: a tag the backend repo pushed to this account's
-  // Cloudflare registry (sha-<short sha> or latest); empty = the image of that repo's last
-  // successful publish run. *_INSTANCE: an instance type (lite, basic, standard-1..4) or custom
-  // JSON {"vcpu":0.5,"memory_mib":2048,"disk_mb":4000}; empty = the one in wrangler.jsonc.
-  backend_image_tag: get('BACKEND_IMAGE_TAG'),
-  admin_backend_image_tag: get('ADMIN_BACKEND_IMAGE_TAG'),
+  // Container size, read by each backend repo's deploy: an instance type (lite, basic,
+  // standard-1..4) or custom JSON {"vcpu":0.5,"memory_mib":2048,"disk_mb":4000};
+  // empty = the one in that repo's cloudflare/wrangler.jsonc.
   backend_instance: get('BACKEND_INSTANCE'),
   admin_backend_instance: get('ADMIN_BACKEND_INSTANCE'),
 };
@@ -128,21 +132,24 @@ if (process.env.SKIP_LOOKUPS !== 'true') {
       site,
       admin: `${prefix}admin.${zone.name}`,
       api: `${prefix}api.${zone.name}`,
+      auth: `${prefix}auth.${zone.name}`,
       images: `${prefix}images.${zone.name}`,
     });
     out.api_url = `https://${out.api}`;
+    out.auth_url = `https://${out.auth}`;
 
     // Never take over another environment's hostnames
     for (const other of Object.keys(DEFAULTS).filter((e) => e !== envName)) {
       const theirs = hostOf(get('URL', other));
       if (!theirs) continue;
-      const taken = [theirs, `admin.${theirs}`, `api.${theirs}`, `images.${theirs}`];
-      const clash = [out.site, out.admin, out.api, out.images].find((h) => taken.includes(h));
+      const taken = [theirs, `admin.${theirs}`, `api.${theirs}`, `auth.${theirs}`, `images.${theirs}`];
+      const clash = [out.site, out.admin, out.api, out.auth, out.images].find((h) => taken.includes(h));
       if (clash) die(`${envName} hostname ${clash} collides with ${other} (${theirs}): change ${envName.toUpperCase()}_URL`);
     }
   } else {
     const { subdomain } = await cf(`/accounts/${out.account_id}/workers/subdomain`);
-    out.api_url = `https://${out.worker}.${subdomain}.workers.dev`;
+    out.api_url = `https://${out.backend_worker}.${subdomain}.workers.dev`;
+    out.auth_url = `https://${out.auth_worker}.${subdomain}.workers.dev`;
   }
 }
 

@@ -20,7 +20,7 @@ terraform {
   }
 }
 
-# Authenticates via CLOUDFLARE_API_TOKEN (needs Workers R2 Storage: Edit).
+# Authenticates via CLOUDFLARE_API_TOKEN (needs Workers R2 Storage: Edit, Workers KV Storage: Edit).
 # The D1 database is NOT managed here: it already exists in Cloudflare.
 provider "cloudflare" {}
 
@@ -37,6 +37,12 @@ variable "r2_bucket_name" {
 variable "cloudflare_database_id" {
   type        = string
   description = "UUID of the existing D1 database (Cloudflare dashboard -> Storage & databases -> D1)"
+}
+
+variable "kv_cache_title" {
+  type        = string
+  default     = "prket-alandlos-backend-cache"
+  description = "Title of the backend's cache KV namespace; the backend repo's deploy finds it by this title"
 }
 
 variable "r2_public_domain" {
@@ -69,12 +75,23 @@ resource "cloudflare_r2_custom_domain" "assets" {
   min_tls     = "1.2"
 }
 
+# The backend's cache (products, store info). Only a cache: R2 stays the source of truth, so
+# the namespace can be emptied or recreated at any time.
+resource "cloudflare_workers_kv_namespace" "cache" {
+  account_id = var.cloudflare_account_id
+  title      = var.kv_cache_title
+}
+
 output "r2_public_url" {
   value = var.r2_public_domain == "" ? "" : "https://${var.r2_public_domain}"
 }
 
 output "r2_bucket_name" {
   value = cloudflare_r2_bucket.assets.name
+}
+
+output "kv_cache_id" {
+  value = cloudflare_workers_kv_namespace.cache.id
 }
 
 output "cloudflare_database_id" {

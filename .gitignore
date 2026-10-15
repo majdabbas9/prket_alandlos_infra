@@ -10,4 +10,3 @@
 seed/node_modules/
 
 # Per-environment wrangler config written by CI (provision.yml)
-containers/wrangler.ci.json
