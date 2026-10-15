@@ -78,6 +78,14 @@ const out = {
   site_project: d.site_project,
   admin_project: d.admin_project,
   seed_samples: d.seed_samples,
+  // Containers (deploy job). *_IMAGE_TAG: a tag the backend repo pushed to this account's
+  // Cloudflare registry (sha-<short sha> or latest); empty = the image of that repo's last
+  // successful publish run. *_INSTANCE: an instance type (lite, basic, standard-1..4) or custom
+  // JSON {"vcpu":0.5,"memory_mib":2048,"disk_mb":4000}; empty = the one in wrangler.jsonc.
+  backend_image_tag: get('BACKEND_IMAGE_TAG'),
+  admin_backend_image_tag: get('ADMIN_BACKEND_IMAGE_TAG'),
+  backend_instance: get('BACKEND_INSTANCE'),
+  admin_backend_instance: get('ADMIN_BACKEND_INSTANCE'),
 };
 
 // Environments in the same Cloudflare account must not share data

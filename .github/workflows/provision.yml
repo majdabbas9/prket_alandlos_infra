@@ -19,7 +19,8 @@ name: Provision
 #
 # Variables and secrets are read as <ENV>_<NAME> first, then <NAME>:
 #   vars:    DEV_/PROD_ CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, URL,
-#            optional R2_BUCKET_NAME, TF_STATE_BUCKET
+#            optional R2_BUCKET_NAME, TF_STATE_BUCKET, BACKEND_INSTANCE, ADMIN_BACKEND_INSTANCE,
+#            BACKEND_IMAGE_TAG, ADMIN_BACKEND_IMAGE_TAG (run inputs override these four)
 #   secrets: DEV_/PROD_ CLOUDFLARE_API_TOKEN, ACCESS_KEY_ID, SECRET_ACCESS_KEY,
 #            ADMIN_USERNAME, ADMIN_PASSWORD, optional D1_API_TOKEN, JWT_SECRET
 on:
@@ -46,6 +47,22 @@ on:
         description: 'Overwrite the admin password if the user already exists'
         type: boolean
         default: false
+      backend_instance:
+        description: 'Backend size: lite|basic|standard-1..4 or {"vcpu":0.5,"memory_mib":2048,"disk_mb":4000} (empty = <ENV>_BACKEND_INSTANCE / wrangler.jsonc)'
+        type: string
+        required: false
+      admin_backend_instance:
+        description: 'Admin backend size, same format (empty = <ENV>_ADMIN_BACKEND_INSTANCE / wrangler.jsonc)'
+        type: string
+        required: false
+      backend_image_tag:
+        description: 'Backend image tag, e.g. sha-1a2b3c4 (empty = <ENV>_BACKEND_IMAGE_TAG / last published)'
+        type: string
+        required: false
+      admin_backend_image_tag:
+        description: 'Admin backend image tag (empty = <ENV>_ADMIN_BACKEND_IMAGE_TAG / last published)'
+        type: string
+        required: false
 
 # R2-backed state has no lock; serialize runs per environment.
 concurrency:
@@ -75,6 +92,10 @@ jobs:
       api: ${{ steps.config.outputs.api }}
       images: ${{ steps.config.outputs.images }}
       api_url: ${{ steps.config.outputs.api_url }}
+      backend_image_tag: ${{ steps.config.outputs.backend_image_tag }}
+      admin_backend_image_tag: ${{ steps.config.outputs.admin_backend_image_tag }}
+      backend_instance: ${{ steps.config.outputs.backend_instance }}
+      admin_backend_instance: ${{ steps.config.outputs.admin_backend_instance }}
     steps:
       - uses: actions/checkout@v4
 
@@ -215,9 +236,10 @@ jobs:
           if (imgs.length === 0) { console.error('No images found in R2'); process.exit(1); }
           JS
 
-  # Wraps the latest GHCR backend images (containers/*.Dockerfile) and deploys them
-  # as Cloudflare Containers behind one Worker. Backend repos don't trigger this:
-  # after pushing backend changes, re-run it via workflow_dispatch.
+  # Deploys the prebuilt backend images (pushed to this account's Cloudflare registry by
+  # each backend repo's docker-publish.yml) as Cloudflare Containers behind one Worker.
+  # Nothing is built here. Backend repos don't trigger this: after their publish run
+  # finishes, re-run it via workflow_dispatch.
   deploy:
     needs: [config, storage, seed]
     if: github.event_name != 'pull_request'
@@ -240,22 +262,33 @@ jobs:
         with:
           node-version: 22  # wrangler 4 requires Node >= 22
 
-      # The GHCR packages are private, but the backend repos are public: build the
-      # images from source under the same tags, so the FROM lines in
-      # containers/*.Dockerfile resolve to these local images instead of pulling.
-      - name: Build backend images from source
-        working-directory: .
+      # Image tag per backend: run input, then <ENV>_*_IMAGE_TAG, then the commit of that
+      # repo's last successful publish run (its sha-<short sha> tag is in every account's
+      # registry). A concrete tag, unlike "latest", makes wrangler roll out a new image.
+      - name: Resolve image tags
         run: |
-          for repo in prket_alandlos_backend prket_alandlos_admin_backend; do
-            git clone --depth 1 "https://github.com/${{ github.repository_owner }}/$repo.git" "$RUNNER_TEMP/$repo"
-            docker build -t "ghcr.io/majdabbas9/$repo:latest" "$RUNNER_TEMP/$repo"
-          done
+          resolve() {  # <repo> <tag or empty>
+            if [ -n "$2" ]; then echo "$2"; return; fi
+            sha=$(gh api "repos/${{ github.repository_owner }}/$1/actions/workflows/docker-publish.yml/runs?branch=main&status=success&per_page=1" \
+              --jq '.workflow_runs[0].head_sha // empty')
+            [ -n "$sha" ] || { echo "No successful docker-publish.yml run on $1 main - push an image first" >&2; exit 1; }
+            echo "sha-${sha::7}"
+          }
+          # Assigned first: a failed lookup then stops the step (bash -e)
+          backend=$(resolve prket_alandlos_backend "$BACKEND_TAG")
+          admin=$(resolve prket_alandlos_admin_backend "$ADMIN_BACKEND_TAG")
+          echo "BACKEND_IMAGE_TAG=$backend" >> "$GITHUB_ENV"
+          echo "ADMIN_BACKEND_IMAGE_TAG=$admin" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKEND_TAG: ${{ inputs.backend_image_tag || needs.config.outputs.backend_image_tag }}
+          ADMIN_BACKEND_TAG: ${{ inputs.admin_backend_image_tag || needs.config.outputs.admin_backend_image_tag }}
 
       - run: npm ci --no-audit --no-fund
 
       - run: npx tsc --noEmit
 
-      # wrangler.jsonc with this environment's Worker name and bucket
+      # wrangler.jsonc with this environment's Worker name, bucket, images and instance sizes
       - name: Write environment wrangler config
         run: |
           node -e '
@@ -266,9 +299,35 @@ jobs:
             config.name = process.env.WORKER_NAME;
             config.r2_buckets.find((b) => b.binding === "BUCKET").bucket_name = process.env.R2_BUCKET_NAME;
             config.vars.R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
+
+            // "basic" -> named type; {"vcpu":..,"memory_mib":..[,"disk_mb":..]} -> custom type
+            const size = (name, value) => {
+              value = (value || "").trim();
+              if (!value) return undefined;
+              if (!value.startsWith("{")) return value;
+              let o;
+              try { o = JSON.parse(value); } catch { throw new Error(`${name}: invalid JSON: ${value}`); }
+              for (const k of ["vcpu", "memory_mib"])
+                if (typeof o[k] !== "number") throw new Error(`${name}: "${k}" must be a number: ${value}`);
+              return o;
+            };
+            const containers = {
+              Backend: { tag: "BACKEND_IMAGE_TAG", size: "BACKEND_INSTANCE" },
+              AdminBackend: { tag: "ADMIN_BACKEND_IMAGE_TAG", size: "ADMIN_BACKEND_INSTANCE" },
+            };
+            for (const c of config.containers) {
+              const env = containers[c.class_name];
+              if (!env) throw new Error(`No image settings for container ${c.class_name}`);
+              c.image = `registry.cloudflare.com/${process.env.CLOUDFLARE_ACCOUNT_ID}/${c.image}:${process.env[env.tag]}`;
+              c.instance_type = size(env.size, process.env[env.size]) ?? c.instance_type;
+              console.log(`${c.class_name}: ${c.image}, instance_type ${JSON.stringify(c.instance_type)}`);
+            }
             fs.writeFileSync("wrangler.ci.json", JSON.stringify(config, null, 2));
           '
           echo "Worker $WORKER_NAME, bucket $R2_BUCKET_NAME"
+        env:
+          BACKEND_INSTANCE: ${{ inputs.backend_instance || needs.config.outputs.backend_instance }}
+          ADMIN_BACKEND_INSTANCE: ${{ inputs.admin_backend_instance || needs.config.outputs.admin_backend_instance }}
 
       # --domain makes wrangler create the DNS record + certificate for the API hostname
       # (token needs Zone > Workers Routes: Edit). With a public bucket domain, the backend

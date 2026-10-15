@@ -1,4 +1,5 @@
-# Local run of the Cloudflare Containers images (the *.Dockerfile wrappers).
+# Local run of the Cloudflare Containers images (cloudflare.Dockerfile in each backend repo,
+# built on that repo's GHCR image; expects the repos checked out next to this one).
 # Cloudflare ignores this file: in production the same env comes from src/index.ts (envVars)
 # and the size limits from instance_type in wrangler.jsonc. Keep them in sync.
 # Usage (from containers/): docker compose up -d --build
@@ -8,8 +9,8 @@ services:
   # Main API + embedded Redis cache
   backend:
     build:
-      context: .
-      dockerfile: backend.Dockerfile
+      context: ../../prket_alandlos_backend
+      dockerfile: cloudflare.Dockerfile
     container_name: prket_alandlos_cf_backend
     env_file:
       - ../.env
@@ -34,8 +35,8 @@ services:
   # Auth service
   admin-backend:
     build:
-      context: .
-      dockerfile: admin-backend.Dockerfile
+      context: ../../prket_alandlos_admin_backend
+      dockerfile: cloudflare.Dockerfile
     container_name: prket_alandlos_cf_admin_backend
     env_file:
       - ../.env

@@ -9,6 +9,10 @@
 // Deployed by .github/workflows/provision.yml (deploy job), once per environment: CI writes a
 // copy with that environment's Worker name and bucket (scripts/env-config.mjs) - the values
 // below are dev's.
+// Images are prebuilt: each backend repo's docker-publish.yml pushes cloudflare.Dockerfile to
+// every environment's Cloudflare registry. CI turns "image" (repository name only) into
+// registry.cloudflare.com/<account id>/<name>:<tag>, and can override instance_type per
+// environment / run (<ENV>_*_IMAGE_TAG, <ENV>_*_INSTANCE, or the Provision run inputs).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "prket-alandlos-api",
@@ -24,7 +28,7 @@
   "containers": [
     {
       "class_name": "Backend",
-      "image": "./backend.Dockerfile",
+      "image": "prket-alandlos-backend", // from prket_alandlos_backend
       "instance_type": "basic", // 1/4 vCPU, 1 GiB RAM, 4 GB disk
       // Single instance: each instance has its own in-container Redis, so more
       // than one would serve stale caches after a product update.
@@ -32,7 +36,7 @@
     },
     {
       "class_name": "AdminBackend",
-      "image": "./admin-backend.Dockerfile",
+      "image": "prket-alandlos-admin-backend", // from prket_alandlos_admin_backend
       "instance_type": "lite", // 1/16 vCPU, 256 MiB RAM, 2 GB disk
       "max_instances": 1
     }
