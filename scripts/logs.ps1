@@ -1,7 +1,7 @@
 # Prints the backend containers' own log lines (pino output) from Cloudflare Workers Observability.
 # `wrangler tail` can't show these - it only sees the Worker.
 #
-#   .\logs.ps1                  # last 30 min, both containers
+#   .\scripts\logs.ps1          # last 30 min, both containers
 #   .\logs.ps1 -Minutes 120     # further back
 #   .\logs.ps1 -Search redis    # only lines containing "redis"
 #   .\logs.ps1 -All             # include the Worker's own events too
@@ -14,10 +14,12 @@ param(
 )
 
 $account = 'bdea2f34b203a609c98be2413d4f8aaa'
+# Dev's container applications (ids from the Containers API) and Workers
 $names = @{
-  'a03194ce-863b-466d-a99f-9f59f25ff969' = 'backend'
-  'a03f5eac-9564-4aa6-9d93-3db83884e9d8' = 'admin'
-  'prket-alandlos-api'                   = 'worker'
+  'a030d52d-4217-4fcf-9de8-787c8ca8428f' = 'backend'
+  'a03265ff-06be-4760-a43c-e5db67f2c3c1' = 'admin'
+  'prket-alandlos-backend'               = 'worker'
+  'prket-alandlos-auth'                  = 'auth-wk'
 }
 
 $token = $env:CLAUDE_CODE_CLOUDFLARE_TOKEN_DEV
